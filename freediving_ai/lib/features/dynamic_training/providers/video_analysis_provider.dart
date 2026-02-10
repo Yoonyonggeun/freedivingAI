@@ -328,7 +328,7 @@ class VideoAnalysisNotifier extends StateNotifier<VideoAnalysisStateModel> {
         provisionalLevel: provisionalLevel,
         confidence: confidence,
         topIssues: topIssues,
-        analysisMode: analysisData['analysisMode'] as String?,
+        analysisMode: (analysisData['analysisMode'] as Map<String, dynamic>?)?['mode'] as String?,
       );
 
       final warnings = List<String>.from(coaching['warnings'] ?? []);
