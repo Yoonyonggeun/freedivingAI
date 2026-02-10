@@ -12,7 +12,10 @@ class VideoPreflightChecker {
   /// Run preflight checks on extracted poses
   ///
   /// Returns map with warnings and shouldProceed flag
-  Map<String, dynamic> checkVideo(List<Pose> poses) {
+  Map<String, dynamic> checkVideo(
+    List<Pose> poses, {
+    List<Map<String, dynamic>>? perFrameTracking,
+  }) {
     final warnings = <String>[];
     final criticalIssues = <String>[];
 
@@ -41,7 +44,7 @@ class VideoPreflightChecker {
     }
 
     // Check 2: Multi-person detection
-    final multiPersonFrames = _detectMultiPerson(poses);
+    final multiPersonFrames = _detectMultiPerson(poses, perFrameTracking: perFrameTracking);
     if (multiPersonFrames > poses.length * 0.3) {
       warnings.add(
         'Multiple people detected in ${((multiPersonFrames / poses.length) * 100).toStringAsFixed(0)}% of frames. '
@@ -100,30 +103,37 @@ class VideoPreflightChecker {
     };
   }
 
-  /// Detect frames with multiple people
-  int _detectMultiPerson(List<Pose> poses) {
-    // Simple heuristic: if too many landmarks detected, likely multiple people
-    // ML Kit Pose Detection should only detect one person, but may pick up
-    // multiple if they're close together
+  /// Detect frames with multiple people.
+  ///
+  /// When [perFrameTracking] is available (from PoseDetectionService), counts
+  /// frames where `detectedPoseCount > 1`. Falls back to a landmark-count
+  /// heuristic when tracking data is not provided.
+  int _detectMultiPerson(
+    List<Pose> poses, {
+    List<Map<String, dynamic>>? perFrameTracking,
+  }) {
+    // Prefer per-frame tracking data from PoseDetectionService
+    if (perFrameTracking != null && perFrameTracking.isNotEmpty) {
+      int multiPersonCount = 0;
+      for (final frame in perFrameTracking) {
+        final count = frame['detectedPoseCount'] as int? ?? 0;
+        if (count > 1) {
+          multiPersonCount++;
+        }
+      }
+      return multiPersonCount;
+    }
 
+    // Fallback: landmark-count heuristic (kept for backward compatibility)
     int multiPersonCount = 0;
-
     for (final pose in poses) {
-      // Check for duplicate or conflicting landmarks
-      // If we have multiple shoulders at very different positions, suspect multi-person
-      final landmarks = pose.landmarks.values.toList();
-
-      // Count landmarks with high confidence
-      final highConfidenceLandmarks = landmarks.where(
-        (l) => l.likelihood > 0.7
+      final highConfidenceLandmarks = pose.landmarks.values.where(
+        (l) => l.likelihood > 0.7,
       ).length;
-
-      // Too many high-confidence landmarks may indicate multiple people
       if (highConfidenceLandmarks > 25) {
         multiPersonCount++;
       }
     }
-
     return multiPersonCount;
   }
 

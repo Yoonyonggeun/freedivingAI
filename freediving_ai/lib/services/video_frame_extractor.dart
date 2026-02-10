@@ -58,27 +58,50 @@ class VideoFrameExtractor {
   /// Extract frames from video file and probe metadata.
   ///
   /// Returns [ExtractionResult] containing frame paths and [VideoMetadata].
+  /// Rotation metadata is applied during extraction so output frames are
+  /// always upright; the returned [VideoMetadata] reflects the corrected
+  /// dimensions with `rotationDegrees = 0`.
   Future<ExtractionResult> extractFrames(
     String videoPath, {
     int fps = defaultFps,
     String scale = defaultScale,
     int quality = defaultQuality,
   }) async {
-    // 1. Create temp directory for this extraction
+    // 1. Probe metadata BEFORE building FFmpeg command
+    final probedMeta = await getVideoMetadata(videoPath);
+    final rotation = probedMeta.rotationDegrees;
+
+    // 2. Create temp directory for this extraction
     _tempDirectory = await _createTempDirectory();
 
-    // 2. Build output pattern
+    // 3. Build output pattern
     final outputPattern = path.join(_tempDirectory!, 'frame_%05d.jpg');
 
-    // 3. Build FFmpeg command
-    // -i: input video
-    // -vf: video filters (fps + scale)
-    // -q:v: JPEG quality
-    final command = '-i "$videoPath" -vf "fps=$fps,scale=$scale" -q:v $quality "$outputPattern"';
+    // 4. Build rotation-aware video filter chain
+    final filters = <String>[];
+
+    // Prepend transpose filter based on rotation
+    if (rotation == 90) {
+      filters.add('transpose=1');
+    } else if (rotation == 180) {
+      filters.add('transpose=1,transpose=1');
+    } else if (rotation == 270) {
+      filters.add('transpose=2');
+    }
+
+    filters.add('fps=$fps');
+    filters.add('scale=$scale');
+
+    final vfArg = filters.join(',');
+
+    // -noautorotate: disable FFmpeg's default auto-rotation so our explicit
+    // transpose filter is the only rotation applied.
+    // -metadata:s:v rotate=0: strip rotation metadata from output.
+    final command = '-noautorotate -i "$videoPath" -vf "$vfArg" -metadata:s:v rotate=0 -q:v $quality "$outputPattern"';
 
     print('[VideoFrameExtractor] Executing FFmpeg: $command');
 
-    // 4. Execute FFmpeg
+    // 5. Execute FFmpeg
     final session = await FFmpegKit.execute(command);
     final returnCode = await session.getReturnCode();
 
@@ -87,13 +110,27 @@ class VideoFrameExtractor {
       throw Exception('FFmpeg frame extraction failed: $output');
     }
 
-    // 5. Get list of extracted frame paths
+    // 6. Get list of extracted frame paths
     final framePaths = await _getExtractedFramePaths(_tempDirectory!);
 
     print('[VideoFrameExtractor] Extracted ${framePaths.length} frames to $_tempDirectory');
 
-    // 6. Probe video metadata
-    final metadata = await getVideoMetadata(videoPath, extractedFrameCount: framePaths.length);
+    // 7. Build corrected metadata — swap width/height for 90/270 rotations
+    final correctedWidth = (rotation == 90 || rotation == 270)
+        ? probedMeta.height
+        : probedMeta.width;
+    final correctedHeight = (rotation == 90 || rotation == 270)
+        ? probedMeta.width
+        : probedMeta.height;
+
+    final metadata = VideoMetadata(
+      durationSec: probedMeta.durationSec,
+      originalFps: probedMeta.originalFps,
+      width: correctedWidth,
+      height: correctedHeight,
+      rotationDegrees: 0, // rotation has been applied
+      extractedFrameCount: framePaths.length,
+    );
 
     return ExtractionResult(framePaths: framePaths, metadata: metadata);
   }

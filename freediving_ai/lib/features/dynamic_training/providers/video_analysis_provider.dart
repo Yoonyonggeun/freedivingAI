@@ -96,7 +96,10 @@ class VideoAnalysisNotifier extends StateNotifier<VideoAnalysisStateModel> {
       // Step 2.5: Preflight check (DNF only)
       List<String>? preflightWarnings;
       if (discipline == 'DNF') {
-        final preflightResult = _preflightChecker.checkVideo(detectedPoses);
+        final preflightResult = _preflightChecker.checkVideo(
+          detectedPoses,
+          perFrameTracking: perFrameTracking,
+        );
         final criticalIssues = List<String>.from(preflightResult['criticalIssues'] ?? []);
         preflightWarnings = List<String>.from(preflightResult['warnings'] ?? []);
         final shouldProceed = preflightResult['shouldProceed'] as bool? ?? true;
@@ -126,6 +129,9 @@ class VideoAnalysisNotifier extends StateNotifier<VideoAnalysisStateModel> {
           detectedPoses,
           landmarkCoverage: trackingResult.avgLandmarkCoverage,
           signalContinuity: trackingResult.signalContinuity,
+          multiPersonFrameRatio: _poseService.multiPersonFrameRatio,
+          trackSwitchCount: _poseService.trackSwitchCount,
+          totalFrames: trackingResult.extractedFrameCount,
         );
       } else if (detectedPoses.isEmpty) {
         analysisData = _indoorAnalysisV2.analyzeIndoorDiscipline(

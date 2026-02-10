@@ -58,6 +58,15 @@ class PoseDetectionService {
   int _trackSwitchCount = 0;
   int _consecutiveTrackFrames = 0;
 
+  // IoU-based tracking state
+  _BboxMinMax? _lastSelectedBbox;
+  static const double _iouMatchThreshold = 0.3;
+  static const double _maxCenterDistance = 200.0;
+
+  // Multi-person frame counters
+  int _multiPersonFrameCount = 0;
+  int _totalProcessedFrames = 0;
+
   Future<List<Map<String, dynamic>>> analyzePosesFromVideo(String videoPath) async {
     List<Map<String, dynamic>> allPoses = [];
 
@@ -94,6 +103,8 @@ class PoseDetectionService {
       stopwatch.stop();
       final inferenceMs = stopwatch.elapsedMilliseconds;
 
+      _totalProcessedFrames++;
+
       if (poses.isEmpty) {
         _consecutiveTrackFrames = 0;
         return PoseDetectionResult(
@@ -112,35 +123,71 @@ class PoseDetectionService {
         method = 'only_pose';
         final center = _getPoseCenter(selectedPose);
         _updateTrackingState(center?.$1, center?.$2, false);
+        _lastSelectedBbox = _getPoseBbox(selectedPose);
         _consecutiveTrackFrames++;
       } else {
         // Multiple poses detected
-        if (_lastSelectedCenterX != null && _lastSelectedCenterY != null) {
-          final closest = _findClosestPose(poses, _lastSelectedCenterX!, _lastSelectedCenterY!);
-          final largest = _findLargestPose(poses);
+        _multiPersonFrameCount++;
 
+        if (_lastSelectedBbox != null) {
+          // Strategy 1: IoU match against previous bbox
+          final iouMatch = _findBestIoUMatch(poses, _lastSelectedBbox!);
+          if (iouMatch != null) {
+            selectedPose = iouMatch;
+            method = 'iou_match';
+            final center = _getPoseCenter(selectedPose);
+            _updateTrackingState(center?.$1, center?.$2, false);
+          } else if (_lastSelectedCenterX != null && _lastSelectedCenterY != null) {
+            // Strategy 2: center distance < 200px
+            final closest = _findClosestPose(poses, _lastSelectedCenterX!, _lastSelectedCenterY!);
+            final closestCenter = _getPoseCenter(closest);
+            final dist = closestCenter != null
+                ? _distance(_lastSelectedCenterX!, _lastSelectedCenterY!,
+                            closestCenter.$1, closestCenter.$2)
+                : double.infinity;
+
+            if (dist < _maxCenterDistance) {
+              selectedPose = closest;
+              method = 'temporal_continuity';
+              _updateTrackingState(closestCenter?.$1, closestCenter?.$2, false);
+            } else {
+              // Strategy 3: best confidence with area tiebreaker
+              selectedPose = _findBestConfidencePose(poses);
+              method = 'confidence_select';
+              final center = _getPoseCenter(selectedPose);
+              _updateTrackingState(center?.$1, center?.$2, true);
+            }
+          } else {
+            selectedPose = _findBestConfidencePose(poses);
+            method = 'confidence_select';
+            final center = _getPoseCenter(selectedPose);
+            _updateTrackingState(center?.$1, center?.$2, false);
+          }
+        } else if (_lastSelectedCenterX != null && _lastSelectedCenterY != null) {
+          final closest = _findClosestPose(poses, _lastSelectedCenterX!, _lastSelectedCenterY!);
           final closestCenter = _getPoseCenter(closest);
           final dist = closestCenter != null
               ? _distance(_lastSelectedCenterX!, _lastSelectedCenterY!,
                           closestCenter.$1, closestCenter.$2)
               : double.infinity;
 
-          if (dist < 200) {
+          if (dist < _maxCenterDistance) {
             selectedPose = closest;
             method = 'temporal_continuity';
             _updateTrackingState(closestCenter?.$1, closestCenter?.$2, false);
           } else {
-            selectedPose = largest;
-            method = 'largest_bbox';
-            final largestCenter = _getPoseCenter(largest);
-            _updateTrackingState(largestCenter?.$1, largestCenter?.$2, true);
+            selectedPose = _findBestConfidencePose(poses);
+            method = 'confidence_select';
+            final center = _getPoseCenter(selectedPose);
+            _updateTrackingState(center?.$1, center?.$2, true);
           }
         } else {
-          selectedPose = _findLargestPose(poses);
-          method = 'largest_bbox';
+          selectedPose = _findBestConfidencePose(poses);
+          method = 'confidence_select';
           final center = _getPoseCenter(selectedPose);
           _updateTrackingState(center?.$1, center?.$2, false);
         }
+        _lastSelectedBbox = _getPoseBbox(selectedPose);
         _consecutiveTrackFrames++;
       }
 
@@ -193,10 +240,17 @@ class PoseDetectionService {
     _lastSelectedCenterY = null;
     _trackSwitchCount = 0;
     _consecutiveTrackFrames = 0;
+    _lastSelectedBbox = null;
+    _multiPersonFrameCount = 0;
+    _totalProcessedFrames = 0;
   }
 
   /// Get cumulative track switch count for the current video.
   int get trackSwitchCount => _trackSwitchCount;
+
+  /// Fraction of processed frames where multiple poses were detected.
+  double get multiPersonFrameRatio =>
+      _totalProcessedFrames > 0 ? _multiPersonFrameCount / _totalProcessedFrames : 0.0;
 
   // ---- Private helpers ----
 
@@ -285,6 +339,79 @@ class PoseDetectionService {
     return sqrt(dx * dx + dy * dy);
   }
 
+  /// Compute bounding box for a pose.
+  _BboxMinMax? _getPoseBbox(Pose pose) {
+    if (pose.landmarks.isEmpty) return null;
+    double minX = double.infinity, minY = double.infinity;
+    double maxX = -double.infinity, maxY = -double.infinity;
+
+    for (final lm in pose.landmarks.values) {
+      if (lm.x < minX) minX = lm.x;
+      if (lm.y < minY) minY = lm.y;
+      if (lm.x > maxX) maxX = lm.x;
+      if (lm.y > maxY) maxY = lm.y;
+    }
+
+    if (minX == double.infinity) return null;
+    return _BboxMinMax(minX: minX, minY: minY, maxX: maxX, maxY: maxY);
+  }
+
+  /// Compute IoU between two bounding boxes.
+  double _computeIoU(_BboxMinMax a, _BboxMinMax b) {
+    final interMinX = max(a.minX, b.minX);
+    final interMinY = max(a.minY, b.minY);
+    final interMaxX = min(a.maxX, b.maxX);
+    final interMaxY = min(a.maxY, b.maxY);
+
+    if (interMaxX <= interMinX || interMaxY <= interMinY) return 0.0;
+
+    final interArea = (interMaxX - interMinX) * (interMaxY - interMinY);
+    final areaA = (a.maxX - a.minX) * (a.maxY - a.minY);
+    final areaB = (b.maxX - b.minX) * (b.maxY - b.minY);
+    final unionArea = areaA + areaB - interArea;
+
+    return unionArea > 0 ? interArea / unionArea : 0.0;
+  }
+
+  /// Find the pose with best IoU match against a reference bbox.
+  /// Returns null if no pose exceeds [_iouMatchThreshold].
+  Pose? _findBestIoUMatch(List<Pose> poses, _BboxMinMax reference) {
+    Pose? bestPose;
+    double bestIoU = 0.0;
+
+    for (final pose in poses) {
+      final bbox = _getPoseBbox(pose);
+      if (bbox == null) continue;
+      final iou = _computeIoU(reference, bbox);
+      if (iou > bestIoU) {
+        bestIoU = iou;
+        bestPose = pose;
+      }
+    }
+
+    return bestIoU >= _iouMatchThreshold ? bestPose : null;
+  }
+
+  /// Select pose with highest average landmark likelihood.
+  /// On tie, prefer larger bounding box area.
+  Pose _findBestConfidencePose(List<Pose> poses) {
+    Pose? best;
+    double bestScore = -1;
+    double bestArea = -1;
+
+    for (final pose in poses) {
+      final score = _averageLandmarkLikelihood(pose);
+      final area = _getBboxArea(pose);
+      if (score > bestScore || (score == bestScore && area > bestArea)) {
+        bestScore = score;
+        bestArea = area;
+        best = pose;
+      }
+    }
+
+    return best ?? poses.first;
+  }
+
   Map<String, dynamic> _convertPoseToMap(Pose pose) {
     Map<String, dynamic> poseData = {};
 
@@ -371,4 +498,19 @@ class PoseDetectionService {
   void dispose() {
     _poseDetector.close();
   }
+}
+
+/// Bounding box helper for IoU computation.
+class _BboxMinMax {
+  final double minX;
+  final double minY;
+  final double maxX;
+  final double maxY;
+
+  _BboxMinMax({
+    required this.minX,
+    required this.minY,
+    required this.maxX,
+    required this.maxY,
+  });
 }

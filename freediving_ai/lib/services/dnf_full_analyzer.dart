@@ -15,6 +15,7 @@ class DNFFullAnalyzer {
   static const double _emaAlpha = 0.25; // Smoothing factor
   static const double _vLowThreshold = 0.08; // Low velocity threshold (normalized)
   static const double _lowEnergyThreshold = 0.05; // Low energy threshold
+  static const double _angularVelocityGlideThreshold = 15.0; // deg/s
 
   // Window parameters for motion classification
   static const double _windowSize = 1.6; // seconds
@@ -29,6 +30,9 @@ class DNFFullAnalyzer {
     List<Pose> poses, {
     double? landmarkCoverage,
     double? signalContinuity,
+    double? multiPersonFrameRatio,
+    int? trackSwitchCount,
+    int? totalFrames,
   }) {
     if (poses.isEmpty) {
       return _getInsufficientDataResult(
@@ -117,13 +121,18 @@ class DNFFullAnalyzer {
       metrics: metrics,
       landmarkCoverage: landmarkCoverage,
       signalContinuity: signalContinuity,
+      multiPersonFrameRatio: multiPersonFrameRatio,
+      trackSwitchCount: trackSwitchCount,
+      totalFrames: totalFrames,
     );
 
     // 11. Determine analysis mode
     final classification = classificationResult['classification'] as String;
     final uncertainClassification = classificationResult['uncertainClassification'] as bool? ?? false;
+    final isInconclusive = classificationResult['isInconclusive'] as bool? ?? false;
 
     final levelTestEligible = classification == 'DNF' &&
+        !isInconclusive &&
         totalKickCycles >= 3 &&
         totalTravelDuration >= 6.0 &&
         validFrameRatio >= 0.30;
@@ -131,6 +140,9 @@ class DNFFullAnalyzer {
     final failedRequirements = <String>[];
     if (classification != 'DNF') {
       failedRequirements.add('Classification is $classification, not DNF');
+    }
+    if (isInconclusive) {
+      failedRequirements.add('Classification is inconclusive — discipline cannot be confirmed');
     }
     if (totalKickCycles < 3) {
       failedRequirements.add('Kick cycles detected: $totalKickCycles (min required: 3)');
@@ -171,8 +183,41 @@ class DNFFullAnalyzer {
     // 14. Turn count
     final turnCount = phases.where((p) => p.phase == 'TURN').length;
 
+    // 15. Overall score availability — all 4 essential metrics must have confidence >= 0.55
+    final essentialMetrics = ['streamline', 'kick', 'arm', 'glide'];
+    final overallScoreAvailable = essentialMetrics.every((key) {
+      if (!metrics.containsKey(key)) return false;
+      final cat = metrics[key] as Map<String, dynamic>;
+      return (cat['confidence'] as double? ?? 0.0) >= 0.55;
+    });
+
+    // 16. Aggregate capture guidance from unreliable metrics and inconclusive classification
+    final aggregatedCaptureGuidance = <String>[];
+    for (final key in essentialMetrics) {
+      if (metrics.containsKey(key)) {
+        final cat = metrics[key] as Map<String, dynamic>;
+        if (cat['confidenceLevel'] == 'not_reliable' && cat.containsKey('captureGuidance')) {
+          final guidance = cat['captureGuidance'] as List<String>;
+          for (final tip in guidance) {
+            if (!aggregatedCaptureGuidance.contains(tip)) {
+              aggregatedCaptureGuidance.add(tip);
+            }
+          }
+        }
+      }
+    }
+    if (isInconclusive) {
+      final classifierGuidance = classificationResult['captureGuidance'] as List<String>? ?? [];
+      for (final tip in classifierGuidance) {
+        if (!aggregatedCaptureGuidance.contains(tip)) {
+          aggregatedCaptureGuidance.add(tip);
+        }
+      }
+    }
+
     return <String, dynamic>{
       'overallScore': overallScore,
+      'overallScoreAvailable': overallScoreAvailable,
       'classification': classificationResult['classification'],
       'classificationConfidence': classificationResult['confidence'],
       'classificationReason': classificationResult['reason'],
@@ -180,9 +225,18 @@ class DNFFullAnalyzer {
       'classificationFeatureValues': classificationResult['featureValues'],
       'classificationRuleTrace': classificationResult['ruleTrace'],
       'uncertainClassification': uncertainClassification,
+      'isInconclusive': isInconclusive,
+      if (isInconclusive) 'conflictReasons': classificationResult['conflictReasons'],
+      if (isInconclusive) 'captureGuidance': classificationResult['captureGuidance'],
       if (classificationResult.containsKey('dynbFeatureBreakdown'))
         'dynbFeatureBreakdown': classificationResult['dynbFeatureBreakdown'],
       'analysisQualityConfidence': analysisQualityConfidence,
+      'analysisUnreliable': analysisQualityConfidence < 0.50,
+      'qualityPenalties': <String, dynamic>{
+        'multiPersonFrameRatio': multiPersonFrameRatio ?? 0.0,
+        'trackSwitchCount': trackSwitchCount ?? 0,
+        'totalFrames': totalFrames ?? 0,
+      },
       'analysisMode': analysisMode,
       'reasonCodes': reasonCodes,
       'detectedActivities': detectedActivities,
@@ -190,6 +244,8 @@ class DNFFullAnalyzer {
       'motionWindows': motionWindows.map((w) => w.toJson()).toList(),
       'metrics': metrics,
       'coaching': coaching,
+      if (aggregatedCaptureGuidance.isNotEmpty)
+        'captureGuidance': aggregatedCaptureGuidance,
       'metadata': <String, dynamic>{
         'totalFrames': frames.length,
         'durationSec': frames.length / _fps,
@@ -198,7 +254,7 @@ class DNFFullAnalyzer {
         'kickCycles': totalKickCycles,
         'turnCount': turnCount,
         'travelSegmentCount': travelPhases.length,
-        'analysisVersion': 'DNF_FULL_v4',
+        'analysisVersion': 'DNF_FULL_v5',
       },
     };
   }
@@ -293,7 +349,121 @@ class DNFFullAnalyzer {
       }
     }
 
+    // Compute joint angles and angular velocities
+    _computeJointAngles(frames);
+
     return frames;
+  }
+
+  /// Compute angle at vertex between points a-vertex-c using dot product.
+  /// Returns angle in degrees.
+  double _computeAngle3Points(PoseLandmark a, PoseLandmark vertex, PoseLandmark c) {
+    final v1x = a.x - vertex.x;
+    final v1y = a.y - vertex.y;
+    final v2x = c.x - vertex.x;
+    final v2y = c.y - vertex.y;
+    final dot = v1x * v2x + v1y * v2y;
+    final m1 = sqrt(v1x * v1x + v1y * v1y);
+    final m2 = sqrt(v2x * v2x + v2y * v2y);
+    if (m1 == 0 || m2 == 0) return 0.0;
+    final cosA = (dot / (m1 * m2)).clamp(-1.0, 1.0);
+    return acos(cosA) * 180 / pi;
+  }
+
+  /// Compute joint angles and angular velocities for all frames.
+  /// Called at the end of _convertToFrameData.
+  void _computeJointAngles(List<FrameData> frames) {
+    // Per-frame: compute joint angles
+    for (final frame in frames) {
+      final lm = frame.landmarks;
+
+      // Knee angle: avg of L/R hip-knee-ankle
+      double kneeSum = 0;
+      int kneeCount = 0;
+      for (final side in [
+        (PoseLandmarkType.leftHip, PoseLandmarkType.leftKnee, PoseLandmarkType.leftAnkle),
+        (PoseLandmarkType.rightHip, PoseLandmarkType.rightKnee, PoseLandmarkType.rightAnkle),
+      ]) {
+        final a = lm[side.$1];
+        final v = lm[side.$2];
+        final c = lm[side.$3];
+        if (a != null && v != null && c != null) {
+          kneeSum += _computeAngle3Points(a, v, c);
+          kneeCount++;
+        }
+      }
+      if (kneeCount > 0) frame.kneeAngle = kneeSum / kneeCount;
+
+      // Hip angle: avg of L/R shoulder-hip-knee
+      double hipSum = 0;
+      int hipCount = 0;
+      for (final side in [
+        (PoseLandmarkType.leftShoulder, PoseLandmarkType.leftHip, PoseLandmarkType.leftKnee),
+        (PoseLandmarkType.rightShoulder, PoseLandmarkType.rightHip, PoseLandmarkType.rightKnee),
+      ]) {
+        final a = lm[side.$1];
+        final v = lm[side.$2];
+        final c = lm[side.$3];
+        if (a != null && v != null && c != null) {
+          hipSum += _computeAngle3Points(a, v, c);
+          hipCount++;
+        }
+      }
+      if (hipCount > 0) frame.hipAngle = hipSum / hipCount;
+
+      // Shoulder angle: avg of L/R elbow-shoulder-hip
+      double shoulderSum = 0;
+      int shoulderCount = 0;
+      for (final side in [
+        (PoseLandmarkType.leftElbow, PoseLandmarkType.leftShoulder, PoseLandmarkType.leftHip),
+        (PoseLandmarkType.rightElbow, PoseLandmarkType.rightShoulder, PoseLandmarkType.rightHip),
+      ]) {
+        final a = lm[side.$1];
+        final v = lm[side.$2];
+        final c = lm[side.$3];
+        if (a != null && v != null && c != null) {
+          shoulderSum += _computeAngle3Points(a, v, c);
+          shoulderCount++;
+        }
+      }
+      if (shoulderCount > 0) frame.shoulderAngle = shoulderSum / shoulderCount;
+
+      // Elbow angle: avg of L/R shoulder-elbow-wrist
+      double elbowSum = 0;
+      int elbowCount = 0;
+      for (final side in [
+        (PoseLandmarkType.leftShoulder, PoseLandmarkType.leftElbow, PoseLandmarkType.leftWrist),
+        (PoseLandmarkType.rightShoulder, PoseLandmarkType.rightElbow, PoseLandmarkType.rightWrist),
+      ]) {
+        final a = lm[side.$1];
+        final v = lm[side.$2];
+        final c = lm[side.$3];
+        if (a != null && v != null && c != null) {
+          elbowSum += _computeAngle3Points(a, v, c);
+          elbowCount++;
+        }
+      }
+      if (elbowCount > 0) frame.elbowAngle = elbowSum / elbowCount;
+    }
+
+    // Between consecutive frames: compute angular velocities
+    for (int i = 1; i < frames.length; i++) {
+      final prev = frames[i - 1];
+      final curr = frames[i];
+      final dt = curr.timestamp - prev.timestamp;
+      if (dt <= 0) continue;
+
+      curr.angularVelocityKnee = (curr.kneeAngle - prev.kneeAngle).abs() / dt;
+      curr.angularVelocityHip = (curr.hipAngle - prev.hipAngle).abs() / dt;
+      curr.angularVelocityShoulder = (curr.shoulderAngle - prev.shoulderAngle).abs() / dt;
+      curr.angularVelocityElbow = (curr.elbowAngle - prev.elbowAngle).abs() / dt;
+
+      curr.meanAngularVelocity = (curr.angularVelocityKnee +
+              curr.angularVelocityHip +
+              curr.angularVelocityShoulder +
+              curr.angularVelocityElbow) /
+          4.0;
+    }
   }
 
   void _smoothHipPositions(List<FrameData> frames) {
@@ -523,19 +693,43 @@ class DNFFullAnalyzer {
     // Detect leg periodicity
     final legPeriodicity = _detectLegPeriodicity(frames);
 
-    // Classification rules
+    // Angular velocity metrics for glide detection
+    final angularVelocities = frames
+        .where((f) => f.meanAngularVelocity > 0)
+        .map((f) => f.meanAngularVelocity)
+        .toList();
+    final windowMeanAngularVelocity = angularVelocities.isNotEmpty
+        ? angularVelocities.reduce((a, b) => a + b) / angularVelocities.length
+        : 0.0;
+
+    // Streamline hold: fraction of frames with shoulderAngle > 150 AND kneeAngle > 160
+    final streamlineFrames = frames.where(
+      (f) => f.shoulderAngle > 150 && f.kneeAngle > 160,
+    ).length;
+    final streamlineHold = frames.isNotEmpty ? streamlineFrames / frames.length : 0.0;
+
+    // Classification rules (ordered by priority)
     String label;
     double confidence;
 
     if (legPeriodicity >= 2 && eLeg > 1.1 * eArm) {
+      // Priority 1: Breaststroke kick
       label = 'BREAST_KICK';
       confidence = 0.85;
     } else if (eArm > 1.2 * eLeg) {
+      // Priority 2: Arm stroke
       label = 'ARM_STROKE';
       confidence = 0.80;
-    } else if (eArm < _lowEnergyThreshold && eLeg < _lowEnergyThreshold) {
+    } else if (angularVelocities.isNotEmpty &&
+        windowMeanAngularVelocity < _angularVelocityGlideThreshold &&
+        streamlineHold > 0.5) {
+      // Priority 3: Angular-velocity glide (camera-motion invariant)
       label = 'GLIDE';
-      confidence = 0.75;
+      confidence = 0.80;
+    } else if (eArm < _lowEnergyThreshold && eLeg < _lowEnergyThreshold) {
+      // Priority 4: Energy-based glide (fallback)
+      label = 'GLIDE';
+      confidence = 0.65;
     } else {
       label = 'MIXED';
       confidence = 0.50;
@@ -975,6 +1169,9 @@ class DNFFullAnalyzer {
   /// - MEASURED: glide detected with glideRatio > 0
   /// - MEASURED_ZERO: no glide phase, swimmer doesn't glide
   /// - DETECTION_FAILED: no stable low-velocity window found
+  ///
+  /// Uses two signals: angular-velocity scan (camera-motion invariant, primary)
+  /// and translation-velocity scan (secondary). Best estimate = max of both.
   Map<String, dynamic> _calculateGlideMetrics(
     double glideTime,
     double travelTime,
@@ -982,7 +1179,7 @@ class DNFFullAnalyzer {
   ) {
     final glideRatio = travelTime > 0 ? glideTime / travelTime : 0.0;
 
-    // Scan for longest consecutive low-velocity run
+    // Scan 1: longest consecutive low translation-velocity run (existing)
     double maxConsecutiveLowVSec = 0.0;
     double currentRunStart = -1;
     for (final frame in travelFrames) {
@@ -997,25 +1194,58 @@ class DNFFullAnalyzer {
       }
     }
 
-    final minGlideWindow = 0.4; // seconds
+    // Scan 2: longest consecutive low angular-velocity run (camera-invariant)
+    double maxConsecutiveLowAngVSec = 0.0;
+    double angRunStart = -1;
+    for (final frame in travelFrames) {
+      if (frame.meanAngularVelocity > 0 &&
+          frame.meanAngularVelocity < _angularVelocityGlideThreshold) {
+        if (angRunStart < 0) angRunStart = frame.timestamp;
+        final runDuration = frame.timestamp - angRunStart;
+        if (runDuration > maxConsecutiveLowAngVSec) {
+          maxConsecutiveLowAngVSec = runDuration;
+        }
+      } else {
+        angRunStart = -1;
+      }
+    }
+
+    // Use best estimate from both signals
+    final bestGlideRunSec = max(maxConsecutiveLowVSec, maxConsecutiveLowAngVSec);
+
+    final minGlideWindow = 0.6; // seconds (3 frames at 5fps)
     String status;
     String reason;
     bool detectionSuccessful;
     double confidence;
 
-    if (maxConsecutiveLowVSec >= minGlideWindow && glideRatio > 0) {
+    if (bestGlideRunSec >= minGlideWindow && glideRatio > 0) {
       status = 'MEASURED';
       reason = 'Glide detected: ${(glideRatio * 100).toStringAsFixed(0)}%';
       detectionSuccessful = true;
       confidence = 0.70;
-    } else if (maxConsecutiveLowVSec >= minGlideWindow && glideRatio == 0) {
+
+      // Clarity bonus: if angular velocity median is well below threshold
+      final angVels = travelFrames
+          .where((f) => f.meanAngularVelocity > 0)
+          .map((f) => f.meanAngularVelocity)
+          .toList();
+      if (angVels.isNotEmpty) {
+        final medAngV = _median(angVels);
+        if (medAngV < _angularVelocityGlideThreshold * 0.5) {
+          confidence = (confidence + 0.10).clamp(0.0, 1.0);
+        }
+      }
+    } else if (bestGlideRunSec >= minGlideWindow && glideRatio == 0) {
       status = 'MEASURED_ZERO';
       reason = 'No glide phase — swimmer doesn\'t glide';
       detectionSuccessful = true;
       confidence = 0.60;
     } else {
       status = 'DETECTION_FAILED';
-      reason = 'No stable low-velocity window detected (longest: ${maxConsecutiveLowVSec.toStringAsFixed(1)}s)';
+      reason = 'No stable glide window detected '
+          '(translation: ${maxConsecutiveLowVSec.toStringAsFixed(1)}s, '
+          'angular: ${maxConsecutiveLowAngVSec.toStringAsFixed(1)}s)';
       detectionSuccessful = false;
       confidence = 0.30;
     }
@@ -1031,6 +1261,7 @@ class DNFFullAnalyzer {
       'reason': reason,
       'detectionSuccessful': detectionSuccessful,
       'maxConsecutiveLowVelocitySec': maxConsecutiveLowVSec,
+      'maxConsecutiveLowAngularVelocitySec': maxConsecutiveLowAngVSec,
       'confidence': confidence,
     };
   }
@@ -1169,7 +1400,10 @@ class DNFFullAnalyzer {
 
   /// Calculate analysis quality confidence (0.0~1.0)
   /// Independent of VideoClassifier — measures data quality, not discipline type.
-  /// Now optionally includes landmark coverage and signal continuity.
+  ///
+  /// Uses conservative fallback defaults (0.5 instead of 0.85/0.90) when
+  /// actual values aren't provided, and applies penalties for multi-person
+  /// contamination, track switches, and low-confidence metric segments.
   double _calculateAnalysisQualityConfidence({
     required double validFrameRatio,
     required double travelDuration,
@@ -1177,6 +1411,9 @@ class DNFFullAnalyzer {
     required Map<String, dynamic> metrics,
     double? landmarkCoverage,
     double? signalContinuity,
+    double? multiPersonFrameRatio,
+    int? trackSwitchCount,
+    int? totalFrames,
   }) {
     // valid frame ratio (target: 0.50+)
     final frameScore = (validFrameRatio / 0.50).clamp(0.0, 1.0);
@@ -1200,19 +1437,53 @@ class DNFFullAnalyzer {
     }
     final metricAvg = metricCount > 0 ? metricConfSum / metricCount : 0.0;
 
-    // landmark coverage (avg fraction of 8 key landmarks per frame)
-    final landmarkCoverageScore = (landmarkCoverage ?? 0.85).clamp(0.0, 1.0);
+    // landmark coverage — conservative fallback (0.5 instead of 0.85)
+    final landmarkCoverageScore = (landmarkCoverage ?? 0.5).clamp(0.0, 1.0);
 
-    // signal continuity: 1 - (gaps / totalFrames)
-    final signalContinuityScore = (signalContinuity ?? 0.90).clamp(0.0, 1.0);
+    // signal continuity — conservative fallback (0.5 instead of 0.90)
+    final signalContinuityScore = (signalContinuity ?? 0.5).clamp(0.0, 1.0);
 
-    return (0.25 * frameScore +
+    final baseQuality = (0.25 * frameScore +
             0.20 * durationScore +
             0.15 * kickScore +
             0.15 * landmarkCoverageScore +
             0.10 * signalContinuityScore +
             0.15 * metricAvg)
         .clamp(0.0, 1.0);
+
+    // Penalty system
+    double penalty = 0.0;
+
+    // Multi-person contamination penalty
+    final mpRatio = multiPersonFrameRatio ?? 0.0;
+    if (mpRatio > 0.05) {
+      penalty += (mpRatio - 0.05) * 0.8;
+    }
+
+    // Track switch penalty
+    if (trackSwitchCount != null && totalFrames != null && totalFrames! > 0) {
+      final switchRate = trackSwitchCount! / totalFrames!;
+      if (switchRate > 0.02) {
+        penalty += switchRate * 2.0;
+      }
+    }
+
+    // Missing segment penalty: per metric with confidence < 0.4
+    for (final key in ['streamline', 'kick', 'arm', 'glide']) {
+      if (metrics.containsKey(key)) {
+        final cat = metrics[key] as Map<String, dynamic>;
+        final conf = cat['confidence'] as double? ?? 0.0;
+        if (conf < 0.4) {
+          penalty += 0.03;
+        }
+        // Extra penalty for glide DETECTION_FAILED
+        if (key == 'glide' && cat['status'] == 'DETECTION_FAILED') {
+          penalty += 0.05;
+        }
+      }
+    }
+
+    return (baseQuality - penalty).clamp(0.0, 1.0);
   }
 
   /// Count total kick cycles from motion windows
@@ -1305,8 +1576,48 @@ class DNFFullAnalyzer {
         'cycleCount': windowCycleCounts[key] ?? 0,
       };
 
-      // Add confidence level label
-      cat['confidenceLevel'] = confidence >= 0.70 ? 'High' : confidence >= 0.40 ? 'Med' : 'Low';
+      // Add confidence level label (three-tier system)
+      if (confidence >= 0.70) {
+        cat['confidenceLevel'] = 'confirmed';
+      } else if (confidence >= 0.55) {
+        cat['confidenceLevel'] = 'likely';
+      } else {
+        cat['confidenceLevel'] = 'not_reliable';
+        // Add per-metric guidance for unreliable measurements
+        cat['notReliableReasons'] = <String>[
+          '${_formatCategoryName(key)} confidence is ${(confidence * 100).toStringAsFixed(0)}% (needs ≥55%)',
+          if (cat.containsKey('message')) cat['message'] as String,
+        ];
+        cat['captureGuidance'] = _getCaptureGuidanceForMetric(key);
+      }
+    }
+  }
+
+  /// Get filming tips for a specific metric category.
+  List<String> _getCaptureGuidanceForMetric(String category) {
+    switch (category) {
+      case 'streamline':
+        return [
+          'Film from the side with the full body in frame',
+          'Ensure good lighting and a stable camera',
+        ];
+      case 'kick':
+        return [
+          'Record at least 3 visible kick cycles',
+          'Film from the side to show leg movement clearly',
+        ];
+      case 'arm':
+        return [
+          'Record at least 1 full arm stroke cycle',
+          'Ensure arms are visible throughout the stroke',
+        ];
+      case 'glide':
+        return [
+          'Record at least 6 seconds of continuous swimming',
+          'Include the glide phase between strokes',
+        ];
+      default:
+        return ['Film with full body visible from the side'];
     }
   }
 
@@ -1374,10 +1685,10 @@ class DNFFullAnalyzer {
       }
     }
 
-    if (scores.isEmpty) return 50.0;
+    if (scores.isEmpty) return 0.0;
 
     final totalWeight = weights.fold<double>(0.0, (a, b) => a + b);
-    if (totalWeight == 0) return 50.0;
+    if (totalWeight == 0) return 0.0;
 
     double weightedSum = 0.0;
     for (int i = 0; i < scores.length; i++) {
@@ -1579,6 +1890,21 @@ class FrameData {
   double curvature; // shoulder-hip-knee angle deviation from 180°
   double roll; // |leftShoulder.y - rightShoulder.y| / shoulderWidth
 
+  // Joint angles (degrees)
+  double kneeAngle;
+  double hipAngle;
+  double shoulderAngle;
+  double elbowAngle;
+
+  // Angular velocities (deg/s)
+  double angularVelocityKnee;
+  double angularVelocityHip;
+  double angularVelocityShoulder;
+  double angularVelocityElbow;
+
+  // Mean angular velocity across all four joints (deg/s)
+  double meanAngularVelocity;
+
   FrameData({
     required this.frameIndex,
     required this.timestamp,
@@ -1588,6 +1914,15 @@ class FrameData {
     this.velocity = 0.0,
     this.curvature = 0.0,
     this.roll = 0.0,
+    this.kneeAngle = 0.0,
+    this.hipAngle = 0.0,
+    this.shoulderAngle = 0.0,
+    this.elbowAngle = 0.0,
+    this.angularVelocityKnee = 0.0,
+    this.angularVelocityHip = 0.0,
+    this.angularVelocityShoulder = 0.0,
+    this.angularVelocityElbow = 0.0,
+    this.meanAngularVelocity = 0.0,
   });
 }
 

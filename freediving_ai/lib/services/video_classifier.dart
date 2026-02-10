@@ -37,16 +37,53 @@ class VideoClassifier {
     final dynbScore = _scoreDYNB(features, dynbTrace);
 
     // Determine winner
-    final maxScore = [dnfScore, dynScore, dynbScore].reduce(max);
+    final allScores = [dnfScore, dynScore, dynbScore]..sort((a, b) => b.compareTo(a));
+    final maxScore = allScores[0];
+    final secondHighestScore = allScores[1];
+    final scoreDelta = maxScore - secondHighestScore;
 
     String classification;
     double confidence;
     String reason;
+    bool isInconclusive = false;
+    List<String> conflictReasons = [];
+    List<String> captureGuidance = [];
 
     if (maxScore < 0.3) {
       classification = 'OTHER';
       confidence = 0.0;
       reason = 'Motion pattern does not match any freediving discipline';
+    } else if (scoreDelta < 0.15 && maxScore >= 0.3) {
+      // Scores too close — inconclusive
+      isInconclusive = true;
+
+      // Still assign best-guess classification
+      if (dnfScore == maxScore) {
+        classification = 'DNF';
+      } else if (dynScore == maxScore) {
+        classification = 'DYN';
+      } else {
+        classification = 'DYNB';
+      }
+      confidence = maxScore;
+      reason = 'Classification uncertain — top disciplines score within ${(scoreDelta * 100).toStringAsFixed(0)}% of each other';
+
+      // Build conflict reasons
+      final scoreMap = {'DNF': dnfScore, 'DYN': dynScore, 'DYNB': dynbScore};
+      final sorted = scoreMap.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
+      conflictReasons = [
+        '${sorted[0].key} (${(sorted[0].value * 100).toStringAsFixed(0)}%) vs '
+            '${sorted[1].key} (${(sorted[1].value * 100).toStringAsFixed(0)}%)',
+        'Score gap: ${(scoreDelta * 100).toStringAsFixed(0)}% (needs ≥15% for confident classification)',
+      ];
+
+      // Generate filming tips
+      captureGuidance = [
+        'Film from a side angle to show kick pattern clearly',
+        'Ensure full body (head to toes) is visible',
+        'Record at least 3 complete kick/stroke cycles',
+        'Avoid filming multiple swimmers in the same frame',
+      ];
     } else if (dnfScore == maxScore) {
       classification = 'DNF';
       confidence = dnfScore;
@@ -135,6 +172,10 @@ class VideoClassifier {
       'featureValues': features,
       'ruleTrace': topTrace,
       'uncertainClassification': uncertainClassification,
+      'isInconclusive': isInconclusive,
+      'scoreDelta': scoreDelta,
+      'conflictReasons': conflictReasons,
+      'captureGuidance': captureGuidance,
       'dynbFeatureBreakdown': dynbFeatureBreakdown,
     };
   }

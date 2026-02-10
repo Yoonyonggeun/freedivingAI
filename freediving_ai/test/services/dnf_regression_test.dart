@@ -260,11 +260,13 @@ void main() {
 
       final requiredKeys = [
         'overallScore',
+        'overallScoreAvailable',
         'classification',
         'classificationConfidence',
         'classificationReason',
         'classificationScores',
         'analysisQualityConfidence',
+        'analysisUnreliable',
         'analysisMode',
         'reasonCodes',
         'detectedActivities',
@@ -298,6 +300,14 @@ void main() {
           expect(cat.containsKey('confidenceLevel'), true, reason: '$key missing confidenceLevel');
           expect(cat.containsKey('measurementBasis'), true, reason: '$key missing measurementBasis');
 
+          // Confidence level should be one of the v5 tier labels
+          final level = cat['confidenceLevel'] as String;
+          expect(
+            ['confirmed', 'likely', 'not_reliable'].contains(level),
+            true,
+            reason: '$key: confidenceLevel should be confirmed/likely/not_reliable, got $level',
+          );
+
           final basis = cat['measurementBasis'] as Map<String, dynamic>;
           expect(basis.containsKey('frameCount'), true);
           expect(basis.containsKey('cycleCount'), true);
@@ -324,7 +334,7 @@ void main() {
       }
     });
 
-    test('Metadata v4 fields present', () {
+    test('Metadata v5 fields present', () {
       final poses = TestPoseGenerators.generateScenario(
         scenario: 'normal_25m',
         durationFrames: 75,
@@ -334,7 +344,7 @@ void main() {
       final result = analyzer.analyzeDNFFull(poses);
       final metadata = result['metadata'] as Map<String, dynamic>;
 
-      expect(metadata['analysisVersion'], 'DNF_FULL_v4');
+      expect(metadata['analysisVersion'], 'DNF_FULL_v5');
       expect(metadata.containsKey('turnCount'), true);
       expect(metadata.containsKey('travelSegmentCount'), true);
     });
@@ -409,6 +419,148 @@ void main() {
       assertBasicOutput(result, 'with_coverage_params');
       final quality = result['analysisQualityConfidence'] as double;
       expect(quality, greaterThan(0.0));
+    });
+  });
+
+  group('Multi-Person Contamination', () {
+    test('High multi-person ratio degrades quality score', () {
+      final poses = TestPoseGenerators.generateScenario(
+        scenario: 'normal_25m',
+        durationFrames: 75,
+        includeStart: true,
+      );
+
+      // Baseline — no contamination
+      final baselineResult = analyzer.analyzeDNFFull(poses);
+      final baselineQuality = baselineResult['analysisQualityConfidence'] as double;
+
+      // With heavy multi-person contamination
+      final contaminatedResult = analyzer.analyzeDNFFull(
+        poses,
+        multiPersonFrameRatio: 0.40,
+        trackSwitchCount: 8,
+        totalFrames: 75,
+      );
+
+      final contaminatedQuality = contaminatedResult['analysisQualityConfidence'] as double;
+      expect(contaminatedQuality, lessThan(baselineQuality),
+          reason: 'Multi-person contamination should degrade quality');
+      expect(contaminatedQuality, lessThan(0.70),
+          reason: 'Heavy contamination should push quality below 0.70');
+      expect(contaminatedResult['analysisUnreliable'], isA<bool>(),
+          reason: 'analysisUnreliable should be present');
+    });
+
+    test('Quality penalties are exposed in output', () {
+      final poses = TestPoseGenerators.generateScenario(
+        scenario: 'normal_25m',
+        durationFrames: 75,
+        includeStart: true,
+      );
+
+      final result = analyzer.analyzeDNFFull(
+        poses,
+        multiPersonFrameRatio: 0.20,
+        trackSwitchCount: 3,
+        totalFrames: 75,
+      );
+
+      expect(result.containsKey('qualityPenalties'), true);
+      final penalties = result['qualityPenalties'] as Map<String, dynamic>;
+      expect(penalties['multiPersonFrameRatio'], 0.20);
+      expect(penalties['trackSwitchCount'], 3);
+    });
+  });
+
+  group('Inconclusive Classification', () {
+    test('isInconclusive field present in output', () {
+      final poses = TestPoseGenerators.generateScenario(
+        scenario: 'normal_25m',
+        durationFrames: 75,
+        includeStart: true,
+      );
+
+      final result = analyzer.analyzeDNFFull(poses);
+      expect(result.containsKey('isInconclusive'), true,
+          reason: 'isInconclusive should always be in output');
+      expect(result['isInconclusive'], isA<bool>());
+    });
+
+    test('Inconclusive blocks LEVEL_TEST eligibility', () {
+      final poses = TestPoseGenerators.generateScenario(
+        scenario: 'normal_25m',
+        durationFrames: 75,
+        includeStart: true,
+      );
+
+      final result = analyzer.analyzeDNFFull(poses);
+      final analysisMode = result['analysisMode'] as Map<String, dynamic>;
+
+      // If classification is inconclusive, LEVEL_TEST should be disabled
+      if (result['isInconclusive'] == true) {
+        expect(analysisMode['levelTestEligible'], false,
+            reason: 'Inconclusive classification should disable LEVEL_TEST');
+        final failed = analysisMode['failedRequirements'] as List;
+        expect(
+          failed.any((r) => r.toString().contains('inconclusive')),
+          true,
+          reason: 'Failed requirements should mention inconclusive',
+        );
+      }
+    });
+  });
+
+  group('Angular Velocity Glide Detection', () {
+    test('all_glide scenario detects glide via angular velocity', () {
+      final poses = TestPoseGenerators.generateScenario(
+        scenario: 'all_glide',
+        durationFrames: 75,
+      );
+
+      final result = analyzer.analyzeDNFFull(poses);
+      assertBasicOutput(result, 'angular_velocity_glide');
+
+      final metrics = result['metrics'] as Map<String, dynamic>;
+      if (metrics.containsKey('glide')) {
+        final glide = metrics['glide'] as Map<String, dynamic>;
+        final glideStatus = glide['status'] as String?;
+        // all_glide should detect glide — should NOT be DETECTION_FAILED
+        expect(glideStatus, isNot('DETECTION_FAILED'),
+            reason: 'all_glide scenario should detect glide via angular velocity');
+      }
+    });
+
+    test('no_glide scenario still has valid glide output', () {
+      final poses = TestPoseGenerators.generateScenario(
+        scenario: 'no_glide',
+        durationFrames: 75,
+      );
+
+      final result = analyzer.analyzeDNFFull(poses);
+      assertBasicOutput(result, 'no_glide_angular');
+
+      final metrics = result['metrics'] as Map<String, dynamic>;
+      if (metrics.containsKey('glide')) {
+        final glide = metrics['glide'] as Map<String, dynamic>;
+        final glideStatus = glide['status'] as String?;
+        expect(
+          ['MEASURED', 'MEASURED_ZERO', 'DETECTION_FAILED', 'AVAILABLE', 'NOT_AVAILABLE'].contains(glideStatus),
+          true,
+          reason: 'Glide status should be valid, got $glideStatus',
+        );
+      }
+    });
+
+    test('overallScoreAvailable reflects metric confidence', () {
+      final poses = TestPoseGenerators.generateScenario(
+        scenario: 'normal_25m',
+        durationFrames: 75,
+        includeStart: true,
+      );
+
+      final result = analyzer.analyzeDNFFull(poses);
+      expect(result.containsKey('overallScoreAvailable'), true);
+      expect(result['overallScoreAvailable'], isA<bool>());
     });
   });
 }
