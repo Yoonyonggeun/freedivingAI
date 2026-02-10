@@ -1,0 +1,313 @@
+{
+  "head_unstable": {
+    "issue": "Head position unstable - excessive pitch variation",
+    "drills": [
+      {
+        "name": "Neutral Head Drill",
+        "type": "short",
+        "distance": "25m",
+        "reps": 4,
+        "focus": "Keep head neutral, eyes looking 45° down",
+        "steps": [
+          "Push off wall with perfect streamline",
+          "Focus on single spot on pool floor",
+          "Keep head still - move from shoulders down",
+          "Breathe without lifting head"
+        ],
+        "rest": "30 seconds between reps"
+      },
+      {
+        "name": "Extended Neutral Position Hold",
+        "type": "long",
+        "distance": "50m",
+        "reps": 3,
+        "focus": "Maintain neutral head throughout full length",
+        "steps": [
+          "Use tempo trainer set to desired stroke rate",
+          "Focus on head stability during arm recovery",
+          "Keep chin tucked slightly (fist distance from chest)",
+          "Film yourself to verify neutral position"
+        ],
+        "rest": "60 seconds between reps"
+      }
+    ]
+  },
+  "curvature_high": {
+    "issue": "Excessive body curvature (banana shape) during glide",
+    "drills": [
+      {
+        "name": "Streamline Hold with Wall Push",
+        "type": "short",
+        "distance": "15m",
+        "reps": 6,
+        "focus": "Maintain straight body line from fingertips to toes",
+        "steps": [
+          "Push off wall explosively",
+          "Squeeze core tight (think plank position)",
+          "Point toes hard",
+          "Hold streamline until momentum stops"
+        ],
+        "rest": "20 seconds between reps"
+      },
+      {
+        "name": "Streamline + Kick Combo",
+        "type": "long",
+        "distance": "50m",
+        "reps": 4,
+        "focus": "Reduce curvature during kick recovery",
+        "steps": [
+          "Start with 10m perfect streamline hold",
+          "Add one slow, controlled breaststroke kick",
+          "Return immediately to streamline",
+          "Focus on keeping hips high during recovery",
+          "Repeat cycle to end of pool"
+        ],
+        "rest": "45 seconds between reps"
+      }
+    ]
+  },
+  "wobble_high": {
+    "issue": "Excessive lateral/vertical wobble - unnecessary motion",
+    "drills": [
+      {
+        "name": "Single Kick Stabilization",
+        "type": "short",
+        "distance": "25m",
+        "reps": 5,
+        "focus": "Minimize lateral movement during kick",
+        "steps": [
+          "Push off wall centered on lane line",
+          "Execute one kick, watching lane line below",
+          "Goal: stay perfectly centered on line",
+          "Glide 3-4 seconds before next kick"
+        ],
+        "rest": "30 seconds between reps"
+      },
+      {
+        "name": "Core Stability Training",
+        "type": "long",
+        "distance": "75m",
+        "reps": 3,
+        "focus": "Build core strength to reduce wobble",
+        "steps": [
+          "Swim with pull buoy (arms only)",
+          "Engage core throughout stroke",
+          "Focus on rotation from core, not shoulders",
+          "Keep hips stable - no snaking motion",
+          "Breathe every 3-5 strokes"
+        ],
+        "rest": "60 seconds between reps"
+      }
+    ]
+  },
+  "kick_recovery_slow": {
+    "issue": "Kick recovery too slow - legs not returning to streamline quickly",
+    "drills": [
+      {
+        "name": "Explosive Recovery Drill",
+        "type": "short",
+        "distance": "25m",
+        "reps": 6,
+        "focus": "Snap legs together quickly after power phase",
+        "steps": [
+          "Slow controlled spread (3 seconds)",
+          "SNAP legs together (1 second)",
+          "Count: 1-2-3-SNAP",
+          "Focus on speed of recovery, not power"
+        ],
+        "rest": "20 seconds between reps"
+      },
+      {
+        "name": "Breaststroke Kick on Back",
+        "type": "long",
+        "distance": "50m",
+        "reps": 4,
+        "focus": "Develop fast recovery muscle memory",
+        "steps": [
+          "Float on back, arms in streamline above head",
+          "Execute breaststroke kick",
+          "Watch knees - they should not break water surface",
+          "Snap heels to glutes quickly",
+          "Glide 2 seconds between kicks"
+        ],
+        "rest": "40 seconds between reps"
+      }
+    ]
+  },
+  "kick_asymmetry": {
+    "issue": "Leg asymmetry - left and right legs not moving together",
+    "drills": [
+      {
+        "name": "Mirror Symmetry Check",
+        "type": "short",
+        "distance": "25m",
+        "reps": 5,
+        "focus": "Visual feedback for symmetrical kick",
+        "steps": [
+          "Swim facing pool bottom (side view if possible)",
+          "Execute very slow kicks",
+          "Watch both legs in peripheral vision",
+          "Ensure both knees bend at same time",
+          "Both feet spread equally wide"
+        ],
+        "rest": "30 seconds between reps"
+      },
+      {
+        "name": "Resistance Band Training",
+        "type": "long",
+        "distance": "N/A",
+        "reps": 10,
+        "focus": "Develop balanced muscle strength",
+        "steps": [
+          "Attach resistance band around ankles (on deck)",
+          "Lie on stomach",
+          "Execute breaststroke kick motion slowly",
+          "Focus on equal resistance on both legs",
+          "10 reps, 3 sets"
+        ],
+        "rest": "60 seconds between sets"
+      }
+    ]
+  },
+  "kick_width_suboptimal": {
+    "issue": "Kick width not in optimal range for propulsion",
+    "drills": [
+      {
+        "name": "Width Calibration Drill",
+        "type": "short",
+        "distance": "25m",
+        "reps": 6,
+        "focus": "Find personal optimal kick width",
+        "steps": [
+          "First rep: very narrow kick (shoulder width)",
+          "Second rep: medium kick (1.5x shoulder width)",
+          "Third rep: wide kick (2x shoulder width)",
+          "Note which feels most powerful",
+          "Repeat cycle with optimal width"
+        ],
+        "rest": "25 seconds between reps"
+      },
+      {
+        "name": "Target Width Training",
+        "type": "long",
+        "distance": "50m",
+        "reps": 4,
+        "focus": "Consistent kick width throughout swim",
+        "steps": [
+          "Set mental target width (use visual cue like lane width)",
+          "Execute all kicks at this exact width",
+          "Count kicks per length",
+          "Maintain power with consistent width",
+          "Goal: same kick count each rep"
+        ],
+        "rest": "45 seconds between reps"
+      }
+    ]
+  },
+  "arm_sweep_high": {
+    "issue": "Excessive lateral arm sweep - creates braking force",
+    "drills": [
+      {
+        "name": "Straight Pull Drill",
+        "type": "short",
+        "distance": "25m",
+        "reps": 5,
+        "focus": "Pull straight back, not out to sides",
+        "steps": [
+          "Start with arms extended forward",
+          "Pull hands straight back under body",
+          "Hands should not go wider than shoulders",
+          "Focus on backward motion, not outward",
+          "Quick recovery over water"
+        ],
+        "rest": "30 seconds between reps"
+      },
+      {
+        "name": "Single Arm Stroke",
+        "type": "long",
+        "distance": "50m",
+        "reps": 4,
+        "focus": "Develop efficient pull path",
+        "steps": [
+          "25m right arm only (left in streamline)",
+          "25m left arm only (right in streamline)",
+          "Focus on minimal lateral deviation",
+          "Feel water resistance - pull through it, not around it",
+          "Other arm stays perfectly still"
+        ],
+        "rest": "50 seconds between reps"
+      }
+    ]
+  },
+  "glide_ratio_low": {
+    "issue": "Insufficient glide phase - working too hard",
+    "drills": [
+      {
+        "name": "Stroke Counting",
+        "type": "short",
+        "distance": "25m",
+        "reps": 6,
+        "focus": "Maximize distance per stroke",
+        "steps": [
+          "Count every stroke for length",
+          "Next rep: try to reduce count by 1",
+          "Extend glide by 1 second each time",
+          "Don't sacrifice speed excessively",
+          "Find optimal balance"
+        ],
+        "rest": "25 seconds between reps"
+      },
+      {
+        "name": "Extended Glide Training",
+        "type": "long",
+        "distance": "75m",
+        "reps": 3,
+        "focus": "Build comfort with longer glide phases",
+        "steps": [
+          "After each stroke, count to 3 before next stroke",
+          "Focus on maintaining streamline during glide",
+          "Feel the 'free' forward motion",
+          "Let momentum carry you",
+          "Only stroke when speed drops significantly"
+        ],
+        "rest": "60 seconds between reps"
+      }
+    ]
+  },
+  "rhythm_unstable": {
+    "issue": "Inconsistent kick/stroke rhythm - timing varies",
+    "drills": [
+      {
+        "name": "Tempo Trainer Drill",
+        "type": "short",
+        "distance": "25m",
+        "reps": 5,
+        "focus": "Lock into consistent rhythm",
+        "steps": [
+          "Use tempo trainer set to desired BPM",
+          "One stroke/kick per beep",
+          "Start slow (e.g., 40 BPM)",
+          "Focus on matching beep perfectly",
+          "Gradually increase tempo"
+        ],
+        "rest": "30 seconds between reps"
+      },
+      {
+        "name": "Rhythm Pyramid",
+        "type": "long",
+        "distance": "Variable",
+        "reps": 1,
+        "focus": "Maintain rhythm at different speeds",
+        "steps": [
+          "25m at 30 BPM (very slow, perfect form)",
+          "25m at 40 BPM",
+          "25m at 50 BPM",
+          "25m at 40 BPM (back down)",
+          "25m at 30 BPM",
+          "Rest 90 seconds, repeat"
+        ],
+        "rest": "90 seconds before repeat"
+      }
+    ]
+  }
+}
