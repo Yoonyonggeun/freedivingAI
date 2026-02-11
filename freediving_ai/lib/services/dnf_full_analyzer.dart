@@ -1,6 +1,11 @@
 import 'dart:math';
 import 'package:google_mlkit_pose_detection/google_mlkit_pose_detection.dart';
 import 'video_classifier.dart';
+import 'view_classifier.dart';
+import 'glide_detector.dart';
+import 'temporal_segment_processor.dart';
+import '../models/component_result.dart';
+import '../config/component_view_requirements.dart';
 
 /// DNF Full Clip Analyzer
 ///
@@ -257,6 +262,664 @@ class DNFFullAnalyzer {
         'analysisVersion': 'DNF_FULL_v5',
       },
     };
+  }
+
+  // =========================================================================
+  // Component-level analysis (new pipeline)
+  // =========================================================================
+
+  /// Convert motion windows to per-frame probabilities for temporal processing.
+  ///
+  /// Takes overlapping sliding windows and converts them to per-frame
+  /// probability signals for TemporalSegmentProcessor.
+  List<FrameProbability> _windowsToFrameProbabilities({
+    required List<MotionWindow> windows,
+    required List<FrameData> allFrames,
+    required String targetLabel,
+  }) {
+    if (allFrames.isEmpty) return [];
+
+    final frameProbMap = <int, List<double>>{};
+
+    // Accumulate window votes per frame
+    for (final window in windows.where((w) => w.label == targetLabel)) {
+      final startIdx = allFrames.indexWhere((f) => f.timestamp >= window.startTime);
+      final endIdx = allFrames.indexWhere((f) => f.timestamp > window.endTime);
+
+      final startFrame = startIdx >= 0 ? startIdx : 0;
+      final endFrame = endIdx >= 0 ? endIdx : allFrames.length;
+
+      for (int i = startFrame; i < endFrame && i < allFrames.length; i++) {
+        frameProbMap.putIfAbsent(i, () => []);
+        frameProbMap[i]!.add(window.confidence);
+      }
+    }
+
+    // Convert to frame probabilities (average of overlapping windows)
+    final result = <FrameProbability>[];
+    for (int i = 0; i < allFrames.length; i++) {
+      final probs = frameProbMap[i];
+      final avgProb = probs != null && probs.isNotEmpty
+          ? probs.reduce((a, b) => a + b) / probs.length
+          : 0.0;
+
+      result.add(FrameProbability(
+        frameIndex: i,
+        timeSec: allFrames[i].timestamp,
+        probability: avgProb,
+      ));
+    }
+
+    return result;
+  }
+
+  /// Process component segments with temporal post-processing.
+  ///
+  /// Converts overlapping motion windows into clean, non-overlapping segments
+  /// with hysteresis thresholding and gap merging.
+  ProcessedSegments _processComponentSegments({
+    required List<MotionWindow> windows,
+    required List<FrameData> allFrames,
+    required String componentLabel,
+    required double clipLengthSec,
+  }) {
+    final frameProbabilities = _windowsToFrameProbabilities(
+      windows: windows,
+      allFrames: allFrames,
+      targetLabel: componentLabel,
+    );
+
+    return TemporalSegmentProcessor.processFrameProbabilities(
+      frameProbabilities: frameProbabilities,
+      fps: _fps,
+      clipLengthSec: clipLengthSec,
+    );
+  }
+
+  /// Apply view-based filtering to a component result.
+  ///
+  /// If the detected view is unsuitable for the component, overrides the result
+  /// to NOT_MEASURABLE with view-specific reason and fix path.
+  /// If the view is acceptable but not best, adjusts confidence downward.
+  ComponentResult _applyViewFiltering(
+    ComponentResult component,
+    ViewClassificationResult viewResult,
+  ) {
+    final componentId = component.componentId;
+
+    // Check if view is suitable for this component
+    if (!ComponentViewRequirements.isViewSuitable(componentId, viewResult.viewType)) {
+      // View unsuitable - override to NOT_MEASURABLE
+      return ComponentResult(
+        componentId: componentId,
+        status: ComponentStatus.notMeasurable,
+        confidenceLevel: ConfidenceLevel.low,
+        rawConfidence: 0.0,
+        measurementBasis: 'Camera angle unsuitable: ${viewResult.viewType.displayName}',
+        fixPath: ComponentViewRequirements.getFixPath(componentId, viewResult.viewType),
+        drills: const [],
+        subMetrics: {
+          'viewType': viewResult.viewType.name,
+          'viewConfidence': viewResult.confidence,
+          'unsuitableReason': ComponentViewRequirements.getUnsuitableReason(componentId, viewResult.viewType),
+        },
+      );
+    }
+
+    // View is suitable - check if we should adjust confidence
+    final viewQuality = ComponentViewRequirements.getViewQuality(componentId, viewResult.viewType);
+
+    if (viewQuality == 'acceptable') {
+      // Acceptable but not best - reduce confidence slightly
+      final multiplier = ComponentViewRequirements.getViewConfidenceMultiplier(componentId, viewResult.viewType);
+      final adjustedConfidence = component.rawConfidence * multiplier;
+
+      // Re-determine status and confidence level based on adjusted confidence
+      ComponentStatus adjustedStatus;
+      ConfidenceLevel adjustedConfLevel;
+
+      final duration = component.timeRanges.fold<double>(0.0, (sum, tr) => sum + tr.duration);
+
+      if (adjustedConfidence >= 0.70 && duration >= 2.0) {
+        adjustedStatus = ComponentStatus.confirmed;
+        adjustedConfLevel = ConfidenceLevel.high;
+      } else if (adjustedConfidence >= 0.45 && duration >= 0.8) {
+        adjustedStatus = ComponentStatus.partial;
+        adjustedConfLevel = ConfidenceLevel.medium;
+      } else {
+        // Confidence too low after adjustment
+        adjustedStatus = ComponentStatus.notMeasurable;
+        adjustedConfLevel = ConfidenceLevel.low;
+      }
+
+      // Keep measurement basis concise, view info goes to subMetrics
+      return ComponentResult(
+        componentId: component.componentId,
+        status: adjustedStatus,
+        confidenceLevel: adjustedConfLevel,
+        rawConfidence: adjustedConfidence,
+        score: component.score,
+        timeRanges: component.timeRanges,
+        measurementBasis: component.measurementBasis,
+        fixPath: adjustedStatus == ComponentStatus.notMeasurable
+            ? ComponentViewRequirements.getFixPath(componentId, viewResult.viewType)
+            : component.fixPath,
+        drills: adjustedStatus == ComponentStatus.confirmed || adjustedStatus == ComponentStatus.partial
+            ? component.drills
+            : const [],
+        subMetrics: {
+          ...?component.subMetrics,
+          'viewType': viewResult.viewType.name,
+          'viewQuality': viewQuality,
+          'confidenceMultiplier': multiplier,
+        },
+        feedbackMessage: component.feedbackMessage,
+        compactSegmentSummary: component.compactSegmentSummary,
+        debugSegments: component.debugSegments,
+      );
+    }
+
+    // View is best - keep measurement basis concise, view info goes to subMetrics
+    return ComponentResult(
+      componentId: component.componentId,
+      status: component.status,
+      confidenceLevel: component.confidenceLevel,
+      rawConfidence: component.rawConfidence,
+      score: component.score,
+      timeRanges: component.timeRanges,
+      measurementBasis: component.measurementBasis,
+      fixPath: component.fixPath,
+      drills: component.drills,
+      subMetrics: {
+        ...?component.subMetrics,
+        'viewType': viewResult.viewType.name,
+        'viewQuality': viewQuality,
+      },
+      feedbackMessage: component.feedbackMessage,
+      compactSegmentSummary: component.compactSegmentSummary,
+      debugSegments: component.debugSegments,
+    );
+  }
+
+  /// Analyze all 6 DNF components and return a map of ComponentResults.
+  ///
+  /// Components: streamline, kick, arm, glide, start, turn.
+  /// Uses GlideDetector for pose-change based glide detection.
+  /// Uses TemporalSegmentProcessor for clean, non-overlapping segments.
+  /// Uses ViewClassifier to determine camera angle and component measurability.
+  /// Each component includes status, confidence, score, time ranges,
+  /// measurement basis, and fix path.
+  Map<String, ComponentResult> analyzeComponents(
+    List<Pose> poses, {
+    double? multiPersonFrameRatio,
+    int? trackSwitchCount,
+    int? totalFrames,
+  }) {
+    final components = <String, ComponentResult>{};
+
+    if (poses.isEmpty || poses.length < 5) {
+      // Return all NOT_MEASURABLE
+      for (final id in ['streamline', 'kick', 'arm', 'glide', 'start', 'turn']) {
+        components[id] = ComponentResult(
+          componentId: id,
+          status: ComponentStatus.notMeasurable,
+          confidenceLevel: ConfidenceLevel.low,
+          rawConfidence: 0.0,
+          measurementBasis: 'Insufficient pose data (${poses.length} frames)',
+          fixPath: ComponentResult.getDefaultFixPath(id),
+        );
+      }
+      return components;
+    }
+
+    // Convert to FrameData
+    final frames = _convertToFrameData(poses);
+    if (frames.length < 5) {
+      for (final id in ['streamline', 'kick', 'arm', 'glide', 'start', 'turn']) {
+        components[id] = ComponentResult(
+          componentId: id,
+          status: ComponentStatus.notMeasurable,
+          confidenceLevel: ConfidenceLevel.low,
+          rawConfidence: 0.0,
+          measurementBasis: 'Only ${frames.length} valid frames from ${poses.length} total',
+          fixPath: ComponentResult.getDefaultFixPath(id),
+        );
+      }
+      return components;
+    }
+
+    // Phase detection
+    final phases = _detectPhases(frames);
+    final travelPhases = phases.where((p) => p.phase == 'TRAVEL').toList();
+    if (travelPhases.isEmpty) {
+      travelPhases.add(PhaseData(
+        phase: 'TRAVEL',
+        startFrame: 0,
+        endFrame: frames.length,
+        confidence: 0.5,
+      ));
+    }
+
+    // Concatenate travel frames
+    final travelFrames = <FrameData>[];
+    for (final tp in travelPhases) {
+      travelFrames.addAll(frames.sublist(tp.startFrame, min(tp.endFrame, frames.length)));
+    }
+
+    final totalTravelDuration = travelPhases.fold<double>(0.0, (s, p) => s + p.duration);
+
+    // Motion classification
+    final motionWindows = _classifyMotion(travelFrames);
+    final kickWindows = motionWindows.where((w) => w.label == 'BREAST_KICK').toList();
+    final armWindows = motionWindows.where((w) => w.label == 'ARM_STROKE').toList();
+    final glideWindows = motionWindows.where((w) => w.label == 'GLIDE').toList();
+
+    // Travel time ranges for measurement basis
+    final travelTimeRanges = travelPhases.map((p) => TimeRange(
+      startSec: p.startFrame / _fps,
+      endSec: p.endFrame / _fps,
+    )).toList();
+
+    final clipLengthSec = frames.last.timestamp;
+
+    // View classification (Angle Coach)
+    final viewClassifier = ViewClassifier();
+    final viewResult = viewClassifier.classifyView(poses);
+
+    // 1. Streamline component (use glide segments for streamline measurement)
+    final streamlineProcessed = glideWindows.isNotEmpty
+        ? _processComponentSegments(
+            windows: motionWindows,
+            allFrames: travelFrames,
+            componentLabel: 'GLIDE',
+            clipLengthSec: clipLengthSec,
+          )
+        : ProcessedSegments(
+            segments: travelTimeRanges.map((tr) => TimeSegment(
+              startSec: tr.startSec,
+              endSec: tr.endSec,
+              confidence: 0.5,
+            )).toList(),
+            totalDuration: totalTravelDuration,
+            segmentCount: travelTimeRanges.length,
+            averageConfidence: 0.5,
+            clipLengthSec: clipLengthSec,
+          );
+
+    final streamlineFrames = glideWindows.isNotEmpty
+        ? _getFramesForWindows(frames, glideWindows)
+        : travelFrames;
+    final streamlineMetrics = _calculateStreamlineMetrics(streamlineFrames);
+    streamlineMetrics['confidence'] = streamlineProcessed.averageConfidence;
+
+    final streamlineTop3 = TemporalSegmentProcessor.getTopSegments(streamlineProcessed.segments, 3);
+    final streamlineTimeRanges = streamlineProcessed.segments.map((s) =>
+      TimeRange(startSec: s.startSec, endSec: s.endSec)
+    ).toList();
+
+    final streamlineResult = ComponentResult.fromMetricMap(
+      componentId: 'streamline',
+      metricData: streamlineMetrics,
+      timeRanges: streamlineTimeRanges,
+    );
+
+    final streamlineComponent = ComponentResult(
+      componentId: streamlineResult.componentId,
+      status: streamlineResult.status,
+      confidenceLevel: streamlineResult.confidenceLevel,
+      rawConfidence: streamlineResult.rawConfidence,
+      score: streamlineResult.score,
+      timeRanges: streamlineResult.timeRanges,
+      measurementBasis: streamlineResult.measurementBasis,
+      fixPath: streamlineResult.fixPath,
+      drills: streamlineResult.drills,
+      subMetrics: streamlineResult.subMetrics,
+      feedbackMessage: streamlineResult.feedbackMessage,
+      compactSegmentSummary: streamlineProcessed.getCompactSummary(),
+      debugSegments: streamlineTimeRanges,
+    );
+    components['streamline'] = _applyViewFiltering(streamlineComponent, viewResult);
+
+    // 2. Kick component with temporal processing
+    if (kickWindows.isNotEmpty) {
+      final totalKickCycles = kickWindows.fold<int>(0, (sum, w) => sum + w.periodicity);
+
+      if (totalKickCycles >= 1) {
+        // Process with temporal segmentation
+        final kickProcessed = _processComponentSegments(
+          windows: motionWindows,
+          allFrames: travelFrames,
+          componentLabel: 'BREAST_KICK',
+          clipLengthSec: clipLengthSec,
+        );
+
+        final kickFrames = _getFramesForWindows(frames, kickWindows);
+        final kickMetrics = _calculateKickMetrics(kickFrames, totalKickCycles);
+        kickMetrics['confidence'] = totalKickCycles >= 3 ? 0.85 : 0.65;
+
+        final kickTop3 = TemporalSegmentProcessor.getTopSegments(kickProcessed.segments, 3);
+        final kickTimeRanges = kickProcessed.segments.map((s) =>
+          TimeRange(startSec: s.startSec, endSec: s.endSec)
+        ).toList();
+
+        final kickResult = ComponentResult.fromMetricMap(
+          componentId: 'kick',
+          metricData: kickMetrics,
+          timeRanges: kickTimeRanges,
+        );
+
+        final kickComponent = ComponentResult(
+          componentId: kickResult.componentId,
+          status: kickResult.status,
+          confidenceLevel: kickResult.confidenceLevel,
+          rawConfidence: kickResult.rawConfidence,
+          score: kickResult.score,
+          timeRanges: kickResult.timeRanges,
+          measurementBasis: kickResult.measurementBasis,
+          fixPath: kickResult.fixPath,
+          drills: kickResult.drills,
+          subMetrics: kickResult.subMetrics,
+          feedbackMessage: kickResult.feedbackMessage,
+          compactSegmentSummary: kickProcessed.getCompactSummary(),
+          debugSegments: kickTimeRanges,
+        );
+        components['kick'] = _applyViewFiltering(kickComponent, viewResult);
+      } else {
+        // MEASURABLE_NO_EVENT: detected kicks but insufficient cycles
+        final kickNoEventComponent = ComponentResult(
+          componentId: 'kick',
+          status: ComponentStatus.measurableNoEvent,
+          confidenceLevel: ConfidenceLevel.low,
+          rawConfidence: 0.4,
+          measurementBasis: 'Detected $totalKickCycles kick cycle${totalKickCycles > 1 ? "s" : ""}, need ≥3 for reliable analysis',
+          fixPath: 'Record a longer clip (10–15s) with at least 3 complete kick cycles',
+        );
+        components['kick'] = _applyViewFiltering(kickNoEventComponent, viewResult);
+      }
+    } else {
+      final kickNotMeasurableComponent = ComponentResult(
+        componentId: 'kick',
+        status: ComponentStatus.notMeasurable,
+        confidenceLevel: ConfidenceLevel.low,
+        rawConfidence: 0.0,
+        measurementBasis: 'No kick windows detected',
+        fixPath: ComponentResult.getDefaultFixPath('kick'),
+      );
+      components['kick'] = _applyViewFiltering(kickNotMeasurableComponent, viewResult);
+    }
+
+    // 3. Arm component with temporal processing
+    if (armWindows.isNotEmpty) {
+      final armProcessed = _processComponentSegments(
+        windows: motionWindows,
+        allFrames: travelFrames,
+        componentLabel: 'ARM_STROKE',
+        clipLengthSec: clipLengthSec,
+      );
+
+      final armFrames = _getFramesForWindows(frames, armWindows);
+      final armMetrics = _calculateArmMetrics(armFrames);
+      armMetrics['confidence'] = armWindows.length >= 2 ? 0.80 : 0.60;
+
+      final armTop3 = TemporalSegmentProcessor.getTopSegments(armProcessed.segments, 3);
+      final armTimeRanges = armProcessed.segments.map((s) =>
+        TimeRange(startSec: s.startSec, endSec: s.endSec)
+      ).toList();
+
+      final armResult = ComponentResult.fromMetricMap(
+        componentId: 'arm',
+        metricData: armMetrics,
+        timeRanges: armTimeRanges,
+      );
+
+      final armComponent = ComponentResult(
+        componentId: armResult.componentId,
+        status: armResult.status,
+        confidenceLevel: armResult.confidenceLevel,
+        rawConfidence: armResult.rawConfidence,
+        score: armResult.score,
+        timeRanges: armResult.timeRanges,
+        measurementBasis: armResult.measurementBasis,
+        fixPath: armResult.fixPath,
+        drills: armResult.drills,
+        subMetrics: armResult.subMetrics,
+        feedbackMessage: armResult.feedbackMessage,
+        compactSegmentSummary: armProcessed.getCompactSummary(),
+        debugSegments: armTimeRanges,
+      );
+      components['arm'] = _applyViewFiltering(armComponent, viewResult);
+    } else {
+      // MEASURABLE_NO_EVENT: no arm strokes detected (valid for DNF)
+      final armNoEventComponent = ComponentResult(
+        componentId: 'arm',
+        status: ComponentStatus.measurableNoEvent,
+        confidenceLevel: ConfidenceLevel.low,
+        rawConfidence: 0.4,
+        measurementBasis: 'No arm strokes detected (expected for DNF)',
+        fixPath: null, // No fix needed - this is normal for DNF
+      );
+      components['arm'] = _applyViewFiltering(armNoEventComponent, viewResult);
+    }
+
+    // 4. Glide component (using new GlideDetector with temporal processing)
+    final glideDetector = GlideDetector();
+    final glideResult = glideDetector.detectGlides(travelFrames);
+    final glideTimeRanges = glideResult.intervals.map((i) =>
+      TimeRange(startSec: i.startSec, endSec: i.endSec)
+    ).toList();
+
+    final glideRatio = totalTravelDuration > 0
+        ? glideResult.totalGlideDuration / totalTravelDuration
+        : 0.0;
+
+    // Determine proper status for glide
+    ComponentStatus glideStatus;
+    String? glideFixPath;
+
+    if (glideResult.status == ComponentStatus.notMeasurable) {
+      // Data quality prevents measurement (landmarks missing, etc.)
+      glideStatus = ComponentStatus.notMeasurable;
+      glideFixPath = ComponentResult.getDefaultFixPath('glide');
+    } else if (glideResult.totalGlideDuration < 0.6) {
+      // Measurement possible but glide too short
+      glideStatus = ComponentStatus.measurableNoEvent;
+      glideFixPath = 'Glide phase too short to measure confidently (<0.6s). Try: 1-kick max-glide drill (10–15s clip)';
+    } else {
+      glideStatus = glideResult.status;
+      glideFixPath = null;
+    }
+
+    // Convert glide intervals to clean segments
+    final glideSegments = glideTimeRanges.map((tr) => TimeSegment(
+      startSec: tr.startSec,
+      endSec: tr.endSec,
+      confidence: glideResult.confidence,
+    )).toList();
+
+    final glideProcessed = ProcessedSegments(
+      segments: glideSegments,
+      totalDuration: glideResult.totalGlideDuration,
+      segmentCount: glideSegments.length,
+      averageConfidence: glideResult.confidence,
+      clipLengthSec: clipLengthSec,
+    );
+
+    final glideComponent = ComponentResult(
+      componentId: 'glide',
+      status: glideStatus,
+      confidenceLevel: glideResult.confidence >= 0.70
+          ? ConfidenceLevel.high
+          : glideResult.confidence >= 0.45
+              ? ConfidenceLevel.medium
+              : ConfidenceLevel.low,
+      rawConfidence: glideResult.confidence,
+      score: glideStatus == ComponentStatus.confirmed || glideStatus == ComponentStatus.partial
+          ? _scoreFromTarget(glideRatio, 0.35, 0.10, 0.30)
+          : null,
+      timeRanges: glideTimeRanges,
+      measurementBasis: glideResult.reason,
+      fixPath: glideFixPath,
+      subMetrics: {
+        'glideRatio': glideRatio,
+        'totalGlideDuration': glideResult.totalGlideDuration,
+        'intervalCount': glideResult.intervals.length,
+        'intervals': glideResult.intervals.map((i) => i.toJson()).toList(),
+      },
+      compactSegmentSummary: glideProcessed.getCompactSummary(),
+      debugSegments: glideTimeRanges,
+    );
+    components['glide'] = _applyViewFiltering(glideComponent, viewResult);
+
+    // 5. Start component
+    final hasStart = phases.any((p) => p.phase == 'START' || p.phase == 'PREP');
+    if (hasStart) {
+      final startPhases = phases.where((p) => p.phase == 'START' || p.phase == 'PREP').toList();
+      final startFrames = <FrameData>[];
+      for (final sp in startPhases) {
+        startFrames.addAll(frames.sublist(sp.startFrame, min(sp.endFrame, frames.length)));
+      }
+      final startDuration = startPhases.fold<double>(0.0, (s, p) => s + p.duration);
+      final startConf = startPhases.fold<double>(0.0, (s, p) => s + p.confidence) / startPhases.length;
+      final startTimeRanges = startPhases.map((p) =>
+        TimeRange(startSec: p.startFrame / _fps, endSec: p.endFrame / _fps)
+      ).toList();
+
+      final startComponent = ComponentResult(
+        componentId: 'start',
+        status: startConf >= 0.70 && startDuration >= 0.5
+            ? ComponentStatus.confirmed
+            : startConf >= 0.45
+                ? ComponentStatus.partial
+                : ComponentStatus.notMeasurable,
+        confidenceLevel: startConf >= 0.70
+            ? ConfidenceLevel.high
+            : startConf >= 0.45
+                ? ConfidenceLevel.medium
+                : ConfidenceLevel.low,
+        rawConfidence: startConf,
+        score: startConf >= 0.45 ? (startConf * 100).clamp(0, 100) : null,
+        timeRanges: startTimeRanges,
+        measurementBasis: 'Start/prep phase detected: ${startDuration.toStringAsFixed(1)}s',
+      );
+      components['start'] = _applyViewFiltering(startComponent, viewResult);
+    } else {
+      final startNotMeasurableComponent = ComponentResult(
+        componentId: 'start',
+        status: ComponentStatus.notMeasurable,
+        confidenceLevel: ConfidenceLevel.low,
+        rawConfidence: 0.0,
+        measurementBasis: 'No start/push-off phase detected',
+        fixPath: ComponentResult.getDefaultFixPath('start'),
+      );
+      components['start'] = _applyViewFiltering(startNotMeasurableComponent, viewResult);
+    }
+
+    // 6. Turn component
+    final turnPhases = phases.where((p) => p.phase == 'TURN').toList();
+    if (turnPhases.isNotEmpty) {
+      final turnConf = turnPhases.fold<double>(0.0, (s, p) => s + p.confidence) / turnPhases.length;
+      final turnDuration = turnPhases.fold<double>(0.0, (s, p) => s + p.duration);
+      final turnTimeRanges = turnPhases.map((p) =>
+        TimeRange(startSec: p.startFrame / _fps, endSec: p.endFrame / _fps)
+      ).toList();
+
+      final turnComponent = ComponentResult(
+        componentId: 'turn',
+        status: turnConf >= 0.70 && turnDuration >= 0.5
+            ? ComponentStatus.confirmed
+            : turnConf >= 0.45
+                ? ComponentStatus.partial
+                : ComponentStatus.notMeasurable,
+        confidenceLevel: turnConf >= 0.70
+            ? ConfidenceLevel.high
+            : turnConf >= 0.45
+                ? ConfidenceLevel.medium
+                : ConfidenceLevel.low,
+        rawConfidence: turnConf,
+        score: turnConf >= 0.45 ? (turnConf * 100).clamp(0, 100) : null,
+        timeRanges: turnTimeRanges,
+        measurementBasis: '${turnPhases.length} turn(s) detected: ${turnDuration.toStringAsFixed(1)}s total',
+      );
+      components['turn'] = _applyViewFiltering(turnComponent, viewResult);
+    } else {
+      final turnNotMeasurableComponent = ComponentResult(
+        componentId: 'turn',
+        status: ComponentStatus.notMeasurable,
+        confidenceLevel: ConfidenceLevel.low,
+        rawConfidence: 0.0,
+        measurementBasis: 'No wall turn detected in video',
+        fixPath: ComponentResult.getDefaultFixPath('turn'),
+      );
+      components['turn'] = _applyViewFiltering(turnNotMeasurableComponent, viewResult);
+    }
+
+    return components;
+  }
+
+  /// Calculate quality score with explicit penalty breakdown.
+  ({double overall, double baseScore, Map<String, double> penalties}) calculateQualityWithPenalties({
+    required double validFrameRatio,
+    required double travelDuration,
+    required int kickCycles,
+    required Map<String, ComponentResult> components,
+    double? landmarkCoverage,
+    double? signalContinuity,
+    double? multiPersonFrameRatio,
+    int? trackSwitchCount,
+    int? totalFrames,
+  }) {
+    // Base quality factors
+    final frameScore = (validFrameRatio / 0.50).clamp(0.0, 1.0);
+    final durationScore = (travelDuration / 6.0).clamp(0.0, 1.0);
+    final kickScore = (kickCycles / 3.0).clamp(0.0, 1.0);
+    final landmarkCoverageScore = (landmarkCoverage ?? 0.5).clamp(0.0, 1.0);
+    final signalContinuityScore = (signalContinuity ?? 0.5).clamp(0.0, 1.0);
+
+    // Component confidence average
+    double compConfSum = 0;
+    int compCount = 0;
+    for (final c in components.values) {
+      compConfSum += c.rawConfidence;
+      compCount++;
+    }
+    final compConfAvg = compCount > 0 ? compConfSum / compCount : 0.0;
+
+    final baseScore = (0.25 * frameScore +
+        0.20 * durationScore +
+        0.15 * kickScore +
+        0.15 * landmarkCoverageScore +
+        0.10 * signalContinuityScore +
+        0.15 * compConfAvg).clamp(0.0, 1.0);
+
+    // Penalties
+    final penalties = <String, double>{};
+
+    // Multi-person contamination
+    final mpRatio = multiPersonFrameRatio ?? 0.0;
+    if (mpRatio > 0.05) {
+      penalties['multiPersonContamination'] = -((mpRatio - 0.05) * 0.8);
+    }
+
+    // Unstable tracking
+    if (trackSwitchCount != null && totalFrames != null && totalFrames > 0) {
+      final switchRate = trackSwitchCount / totalFrames;
+      if (switchRate > 0.02) {
+        penalties['unstableTracking'] = -(switchRate * 2.0);
+      }
+    }
+
+    // Missing components
+    final missingCount = components.values
+        .where((c) => c.status == ComponentStatus.notMeasurable)
+        .length;
+    if (missingCount > 0) {
+      penalties['missingComponents'] = -(missingCount * 0.06);
+    }
+
+    final totalPenalty = penalties.values.fold<double>(0.0, (s, v) => s + v);
+    final overall = (baseScore + totalPenalty).clamp(0.0, 1.0);
+
+    return (overall: overall, baseScore: baseScore, penalties: penalties);
   }
 
   // =========================================================================

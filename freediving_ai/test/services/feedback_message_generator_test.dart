@@ -224,8 +224,8 @@ void main() {
           component: component,
         );
 
-        expect(feedback, contains('4.5s'));
-        expect(feedback, contains('2 segments'));
+        expect(feedback, contains('5s')); // Rounded from 4.5s
+        expect(feedback, contains('across 2 segments'));
       });
 
       test('should show confidence percentage for medium confidence', () {
@@ -239,7 +239,7 @@ void main() {
           component: component,
         );
 
-        expect(feedback, contains('55% confidence'));
+        expect(feedback, contains('(55% confidence)'));
       });
 
       test('should qualify video as "limited" for low confidence', () {
@@ -254,7 +254,7 @@ void main() {
         );
 
         expect(feedback, contains('limited video'));
-        expect(feedback, contains('40% confidence'));
+        expect(feedback, contains('(40% confidence)'));
       });
 
       test('should handle empty time ranges gracefully', () {
@@ -288,7 +288,9 @@ void main() {
           component: component,
         );
 
-        expect(feedback, contains('Based on custom measurement approach'));
+        // Measurement basis is no longer passed through as-is
+        // Just verify feedback was generated
+        expect(feedback, contains('streamline'));
       });
     });
 
@@ -587,11 +589,13 @@ void main() {
           rawConfidence: 0.85,
         );
 
-        final citation = FeedbackMessageGenerator.generateMeasurementCitation(
+        final citation = FeedbackMessageGenerator.generateTechnicalDetails(
           component,
         );
 
-        expect(citation, equals('Measured from 2.0-5.2s (85% confidence)'));
+        expect(citation, contains('Segments: 2.0-5.2s'));
+        expect(citation, contains('Total: 3.2s'));
+        expect(citation, contains('Confidence: 85%'));
       });
 
       test('should generate citation with multiple time ranges (≤3)', () {
@@ -604,13 +608,13 @@ void main() {
           rawConfidence: 0.78,
         );
 
-        final citation = FeedbackMessageGenerator.generateMeasurementCitation(
+        final citation = FeedbackMessageGenerator.generateTechnicalDetails(
           component,
         );
 
-        expect(citation, contains('1.0-2.5s'));
-        expect(citation, contains('4.0-6.0s'));
-        expect(citation, contains('78% confidence'));
+        expect(citation, contains('Segments: 1.0-2.5s, 4.0-6.0s'));
+        expect(citation, contains('Total:'));
+        expect(citation, contains('Confidence: 78%'));
       });
 
       test('should show segment count for many time ranges', () {
@@ -625,12 +629,13 @@ void main() {
           rawConfidence: 0.72,
         );
 
-        final citation = FeedbackMessageGenerator.generateMeasurementCitation(
+        final citation = FeedbackMessageGenerator.generateTechnicalDetails(
           component,
         );
 
-        expect(citation, contains('4 segments'));
-        expect(citation, contains('72% confidence'));
+        expect(citation, contains('Segments:'));
+        expect(citation, contains('Total: 4.0s'));
+        expect(citation, contains('Confidence: 72%'));
       });
 
       test('should handle empty time ranges', () {
@@ -640,11 +645,12 @@ void main() {
           rawConfidence: 0.65,
         );
 
-        final citation = FeedbackMessageGenerator.generateMeasurementCitation(
+        final citation = FeedbackMessageGenerator.generateTechnicalDetails(
           component,
         );
 
-        expect(citation, equals('Confidence: 65%'));
+        expect(citation, contains('Full travel phase'));
+        expect(citation, contains('Confidence: 65%'));
       });
     });
 

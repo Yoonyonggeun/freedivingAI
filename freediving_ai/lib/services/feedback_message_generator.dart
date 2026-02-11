@@ -83,17 +83,11 @@ class FeedbackMessageGenerator {
   /// Generate measurement basis string.
   ///
   /// Examples:
-  /// - "Based on 3.2s of video (2.0-5.2s, 85% confidence)"
-  /// - "Measured from 2 segments totaling 4.5s (HIGH confidence)"
-  /// - "Based on limited data (1.2s, 48% confidence)"
+  /// - "Based on 3s of clear video across 2 segments"
+  /// - "Based on 5s of video (medium visibility)"
+  /// - "Based on limited data (1s, 48% confidence)"
   static String? _formatMeasurementBasis(ComponentResult component) {
     if (component.measurementBasis.isEmpty) return null;
-
-    // If measurementBasis is already a complete sentence, use it
-    if (component.measurementBasis.toLowerCase().startsWith('based on') ||
-        component.measurementBasis.toLowerCase().startsWith('measured from')) {
-      return component.measurementBasis;
-    }
 
     // Otherwise, construct from time ranges and confidence
     final totalDuration = component.timeRanges.fold<double>(
@@ -109,7 +103,9 @@ class FeedbackMessageGenerator {
     buffer.write('Based on ');
 
     if (totalDuration > 0.0) {
-      buffer.write('${totalDuration.toStringAsFixed(1)}s of ');
+      // Round duration to whole seconds for cleaner display
+      final roundedDuration = totalDuration.round();
+      buffer.write('${roundedDuration}s of ');
 
       // Qualify video quality based on confidence
       if (component.confidenceLevel == ConfidenceLevel.high) {
@@ -120,23 +116,20 @@ class FeedbackMessageGenerator {
         buffer.write('limited video');
       }
 
-      // Add time range details if available
-      if (component.timeRanges.isNotEmpty) {
-        if (component.timeRanges.length == 1) {
-          final range = component.timeRanges.first;
-          buffer.write(' (${range.startSec.toStringAsFixed(1)}-${range.endSec.toStringAsFixed(1)}s)');
-        } else {
-          buffer.write(' (${component.timeRanges.length} segments)');
-        }
+      // Add segment count if multiple
+      if (component.timeRanges.length > 1) {
+        buffer.write(' across ${component.timeRanges.length} segments');
       }
 
-      // Add confidence percentage for medium/low confidence
-      if (component.confidenceLevel != ConfidenceLevel.high) {
-        buffer.write(', ${(component.rawConfidence * 100).toStringAsFixed(0)}% confidence');
+      // Add visibility note for medium/low confidence
+      if (component.confidenceLevel == ConfidenceLevel.medium) {
+        buffer.write(' (medium visibility)');
+      } else if (component.confidenceLevel == ConfidenceLevel.low) {
+        buffer.write(' (${(component.rawConfidence * 100).round()}% confidence)');
       }
     } else {
       // No time ranges, just confidence
-      buffer.write('${(component.rawConfidence * 100).toStringAsFixed(0)}% confidence measurement');
+      buffer.write('${(component.rawConfidence * 100).round()}% confidence measurement');
     }
 
     buffer.write('.');
@@ -451,30 +444,33 @@ class FeedbackMessageGenerator {
     }
   }
 
-  /// Generate a measurement citation for detailed reports.
+  /// Generate technical details citation for debug/advanced view.
   ///
-  /// Example: "Measured from frames 2.0-5.2s and 7.8-9.5s (85% confidence)"
-  static String generateMeasurementCitation(ComponentResult component) {
+  /// Example: "Segments: 2.0-5.2s, 7.8-9.5s | Total: 6.2s | Confidence: 85%"
+  static String generateTechnicalDetails(ComponentResult component) {
     if (component.timeRanges.isEmpty) {
-      return 'Confidence: ${(component.rawConfidence * 100).toStringAsFixed(0)}%';
+      return 'Full travel phase | Confidence: ${(component.rawConfidence * 100).round()}%';
     }
 
     final buffer = StringBuffer();
-    buffer.write('Measured from ');
+    buffer.write('Segments: ');
 
-    if (component.timeRanges.length == 1) {
-      final range = component.timeRanges.first;
-      buffer.write('${range.startSec.toStringAsFixed(1)}-${range.endSec.toStringAsFixed(1)}s');
-    } else if (component.timeRanges.length <= 3) {
+    if (component.timeRanges.length <= 5) {
       final ranges = component.timeRanges.map(
         (r) => '${r.startSec.toStringAsFixed(1)}-${r.endSec.toStringAsFixed(1)}s',
       ).join(', ');
       buffer.write(ranges);
     } else {
-      buffer.write('${component.timeRanges.length} segments');
+      // Too many segments, just show count
+      final first3 = component.timeRanges.take(3).map(
+        (r) => '${r.startSec.toStringAsFixed(1)}-${r.endSec.toStringAsFixed(1)}s',
+      ).join(', ');
+      buffer.write('$first3, ... (${component.timeRanges.length} total)');
     }
 
-    buffer.write(' (${(component.rawConfidence * 100).toStringAsFixed(0)}% confidence)');
+    final totalDuration = component.timeRanges.fold<double>(0.0, (s, r) => s + r.duration);
+    buffer.write(' | Total: ${totalDuration.toStringAsFixed(1)}s');
+    buffer.write(' | Confidence: ${(component.rawConfidence * 100).round()}%');
 
     return buffer.toString();
   }

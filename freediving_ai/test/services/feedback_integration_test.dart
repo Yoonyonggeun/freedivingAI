@@ -83,7 +83,7 @@ void main() {
       expect(processedStreamline.feedbackMessage, contains('streamline'));
       expect(processedStreamline.feedbackMessage, contains('75/100'));
       expect(processedStreamline.feedbackMessage, contains('Based on'));
-      expect(processedStreamline.feedbackMessage, contains('3.2s'));
+      expect(processedStreamline.feedbackMessage, contains('3s'));
       expect(processedStreamline.feedbackMessage, contains('clear video'));
       expect(processedStreamline.feedbackMessage, contains('excellent body alignment'));
       expect(processedStreamline.feedbackMessage, contains('Focus on'));
@@ -94,8 +94,8 @@ void main() {
       expect(processedKick.feedbackMessage, contains('kick technique'));
       expect(processedKick.feedbackMessage, contains('65/100'));
       expect(processedKick.feedbackMessage, contains('Based on'));
-      expect(processedKick.feedbackMessage, contains('4.5s'));
-      expect(processedKick.feedbackMessage, contains('55% confidence'));
+      expect(processedKick.feedbackMessage, contains('5s'));
+      expect(processedKick.feedbackMessage, contains('(medium visibility)'));
 
       // Verify arm component (notMeasurable) has no feedback
       final processedArm = output.components['arm']!;
@@ -190,7 +190,7 @@ void main() {
       final processed = output.components['streamline']!;
       expect(processed.feedbackMessage, isNotNull);
       expect(processed.feedbackMessage, contains('Based on'));
-      expect(processed.feedbackMessage, contains('5.0s')); // Total duration
+      expect(processed.feedbackMessage, contains('5s')); // Total duration (rounded)
       expect(processed.feedbackMessage, contains('5 segments'));
     });
 
