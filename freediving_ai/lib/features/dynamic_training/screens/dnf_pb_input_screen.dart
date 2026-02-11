@@ -44,17 +44,12 @@ class _DNFPBInputScreenState extends State<DNFPBInputScreen> {
           gradient: AppTheme.backgroundGradient,
         ),
         child: SafeArea(
-          child: SingleChildScrollView(
-            child: Padding(
-              padding: EdgeInsets.all(20.w),
-              child: ConstrainedBox(
-                constraints: BoxConstraints(
-                  minHeight: MediaQuery.of(context).size.height -
-                            MediaQuery.of(context).padding.top -
-                            MediaQuery.of(context).padding.bottom -
-                            kToolbarHeight,
-                ),
-                child: IntrinsicHeight(
+          child: Column(
+            children: [
+              // Scrollable content area
+              Expanded(
+                child: SingleChildScrollView(
+                  padding: EdgeInsets.all(20.w),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
@@ -185,67 +180,94 @@ class _DNFPBInputScreenState extends State<DNFPBInputScreen> {
                           ],
                         ),
                       ),
-
-                      const Spacer(),
-
-                      // Action buttons
-                      Row(
-                        children: [
-                          // Skip button
-                          Expanded(
-                            child: TextButton(
-                              onPressed: () => Navigator.of(context).popUntil((route) => route.isFirst),
-                              child: Text(
-                                'Skip for now',
-                                style: TextStyle(
-                                  color: AppTheme.textSecondary,
-                                  fontSize: 16.sp,
-                                ),
-                              ),
-                            ),
-                          ),
-                          SizedBox(width: 12.w),
-
-                          // Continue button
-                          Expanded(
-                            flex: 2,
-                            child: ElevatedButton(
-                              onPressed: _isLoading ? null : _saveAndContinue,
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: AppTheme.primaryBlue,
-                                padding: EdgeInsets.symmetric(vertical: 16.h),
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(12.r),
-                                ),
-                              ),
-                              child: _isLoading
-                                  ? SizedBox(
-                                      height: 20.h,
-                                      width: 20.w,
-                                      child: const CircularProgressIndicator(
-                                        color: Colors.white,
-                                        strokeWidth: 2,
-                                      ),
-                                    )
-                                  : Text(
-                                      'Continue',
-                                      style: TextStyle(
-                                        color: Colors.white,
-                                        fontSize: 16.sp,
-                                        fontWeight: FontWeight.w600,
-                                      ),
-                                    ),
-                            ),
-                          ),
-                        ],
-                      ),
                     ],
                   ),
                 ),
               ),
-            ),
+
+              // Fixed bottom button area (floating)
+              _buildBottomButtons(),
+            ],
           ),
         ),
+      ),
+    );
+  }
+
+  Widget _buildBottomButtons() {
+    return Container(
+      padding: EdgeInsets.all(20.w),
+      decoration: BoxDecoration(
+        color: AppTheme.surfaceDark.withOpacity(0.95),
+        border: Border(
+          top: BorderSide(
+            color: AppTheme.primaryBlue.withOpacity(0.2),
+            width: 1,
+          ),
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.3),
+            blurRadius: 10,
+            offset: const Offset(0, -5),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          // Skip button
+          Expanded(
+            child: TextButton(
+              onPressed: () => Navigator.of(context).popUntil((route) => route.isFirst),
+              style: TextButton.styleFrom(
+                padding: EdgeInsets.symmetric(vertical: 16.h),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12.r),
+                ),
+              ),
+              child: Text(
+                'Skip for now',
+                style: TextStyle(
+                  color: AppTheme.textSecondary,
+                  fontSize: 16.sp,
+                ),
+              ),
+            ),
+          ),
+          SizedBox(width: 12.w),
+
+          // Continue button
+          Expanded(
+            flex: 2,
+            child: ElevatedButton(
+              onPressed: _isLoading ? null : _saveAndContinue,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppTheme.primaryBlue,
+                padding: EdgeInsets.symmetric(vertical: 16.h),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12.r),
+                ),
+              ),
+              child: _isLoading
+                  ? SizedBox(
+                      height: 20.h,
+                      width: 20.w,
+                      child: const CircularProgressIndicator(
+                        color: Colors.white,
+                        strokeWidth: 2,
+                      ),
+                    )
+                  : Text(
+                      'Continue',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 16.sp,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+            ),
+          ),
+        ],
       ),
     );
   }
