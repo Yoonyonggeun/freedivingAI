@@ -1,0 +1,48 @@
+{
+  "@@locale": "en",
+
+  "getStartedTitle": "Ready to dive in?",
+  "@getStartedTitle": {
+    "description": "Title shown on the first analysis choice screen"
+  },
+
+  "getStartedSubtitle": "Pick a quick demo, or analyze your own swim.",
+  "@getStartedSubtitle": {
+    "description": "Subtitle explaining the two options available"
+  },
+
+  "sampleAnalysisTitle": "Try a sample analysis",
+  "@sampleAnalysisTitle": {
+    "description": "Title for the sample analysis option card"
+  },
+
+  "sampleAnalysisDescription": "See what feedback looks like. No video needed.",
+  "@sampleAnalysisDescription": {
+    "description": "Description explaining the sample analysis option"
+  },
+
+  "sampleAnalysisButton": "View sample",
+  "@sampleAnalysisButton": {
+    "description": "Button text to view sample analysis"
+  },
+
+  "myVideoTitle": "Analyze my DNF",
+  "@myVideoTitle": {
+    "description": "Title for the upload own video option card"
+  },
+
+  "myVideoDescription": "Upload a 10–15s clip. We'll generate coach-style feedback.",
+  "@myVideoDescription": {
+    "description": "Description explaining the upload video option"
+  },
+
+  "myVideoButton": "Upload video",
+  "@myVideoButton": {
+    "description": "Button text to upload user's video"
+  },
+
+  "sampleFooterNote": "You can replay the sample anytime from the menu.",
+  "@sampleFooterNote": {
+    "description": "Footer note explaining sample can be accessed later"
+  }
+}

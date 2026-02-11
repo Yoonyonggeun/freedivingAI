@@ -94,6 +94,9 @@ flutter:
   # the material Icons class.
   uses-material-design: true
 
+  # Enable localization
+  generate: true
+
   # Assets
   assets:
     - assets/images/

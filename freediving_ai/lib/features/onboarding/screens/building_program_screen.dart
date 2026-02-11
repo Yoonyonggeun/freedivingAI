@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../models/user_profile.dart';
-import '../../home/screens/home_screen.dart';
+import 'first_analysis_choice_screen.dart';
 import 'dart:async';
 
 class BuildingProgramScreen extends StatefulWidget {
@@ -57,10 +57,19 @@ class _BuildingProgramScreenState extends State<BuildingProgramScreen>
 
   Future<void> _startBuildingProcess() async {
     for (int i = 0; i < _steps.length; i++) {
-      await Future.delayed(const Duration(milliseconds: 1500));
+      // Step 시작 - currentStep만 업데이트
       if (mounted) {
         setState(() {
           _currentStep = i;
+        });
+      }
+
+      // 진행 시간 대기
+      await Future.delayed(const Duration(milliseconds: 1500));
+
+      // Step 완료 - progress bar 업데이트
+      if (mounted) {
+        setState(() {
           _progress = (i + 1) / _steps.length;
         });
       }
@@ -71,7 +80,7 @@ class _BuildingProgramScreenState extends State<BuildingProgramScreen>
 
     if (mounted) {
       Navigator.of(context).pushReplacement(
-        MaterialPageRoute(builder: (_) => const HomeScreen()),
+        MaterialPageRoute(builder: (_) => const FirstAnalysisChoiceScreen()),
       );
     }
   }

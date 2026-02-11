@@ -1,0 +1,13 @@
+{
+  "@@locale": "ko",
+
+  "getStartedTitle": "바로 시작해볼까요?",
+  "getStartedSubtitle": "샘플로 먼저 체험하거나, 내 영상으로 바로 분석할 수 있어요.",
+  "sampleAnalysisTitle": "샘플 분석 체험",
+  "sampleAnalysisDescription": "영상이 없어도 괜찮아요. 어떤 피드백이 나오는지 먼저 확인해보세요.",
+  "sampleAnalysisButton": "샘플 보기",
+  "myVideoTitle": "내 DNF 분석하기",
+  "myVideoDescription": "10–15초 영상을 업로드하면 코치처럼 핵심 피드백을 제공해요.",
+  "myVideoButton": "영상 업로드",
+  "sampleFooterNote": "샘플은 메뉴에서 언제든 다시 볼 수 있어요."
+}
